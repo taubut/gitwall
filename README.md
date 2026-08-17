@@ -1,6 +1,26 @@
+<div align="center">
+
+<img src="assets/icons/icon.png" width="88" alt="gitwall">
+
 # gitwall
 
-A full-screen wallpaper picker that reads its collection from any GitHub repo.
+**A full-screen wallpaper picker that reads its collection from any GitHub repo or Imgur album.**
+
+</div>
+
+![Slice carousel](assets/screenshots/slices.png)
+
+The focused wallpaper fills the screen behind the strip, so you preview it
+full-size before committing to it.
+
+![Grid view](assets/screenshots/grid.png)
+
+<kbd>G</kbd> switches to a grid.
+
+![Sorted by hue](assets/screenshots/hue.png)
+
+<kbd>S</kbd> sorts the collection by hue.
+
 
 Paste a repository URL, scroll the sheared slice carousel, press Enter. The
 interaction follows [skwd-wall](https://github.com/liixini/skwd-wall)'s slices
