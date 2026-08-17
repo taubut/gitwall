@@ -68,7 +68,37 @@ pub struct Visit {
     pub last_used: u64,
 }
 
+/// What sort of collection a history entry points at, for labelling the list.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum VisitKind {
+    Repo,
+    Album,
+    Search,
+}
+
+impl VisitKind {
+    pub fn label(self) -> &'static str {
+        match self {
+            VisitKind::Repo => "repo",
+            VisitKind::Album => "album",
+            VisitKind::Search => "search",
+        }
+    }
+}
+
 impl Visit {
+    /// Inferred from the input, using the same precedence the resolver uses, so
+    /// the tag always matches where the entry will actually be loaded from.
+    pub fn kind(&self) -> VisitKind {
+        if self.input.contains("imgur.com") {
+            VisitKind::Album
+        } else if crate::RepoRef::parse(&self.input).is_ok() {
+            VisitKind::Repo
+        } else {
+            VisitKind::Search
+        }
+    }
+
     pub fn label(&self) -> String {
         if self.title.is_empty() {
             self.input.clone()
@@ -289,6 +319,23 @@ mod tests {
         assert!(lib.history().is_empty());
 
         let _ = std::fs::remove_dir_all(dir);
+    }
+
+    #[test]
+    fn kind_matches_where_the_entry_will_be_loaded_from() {
+        let of = |input: &str| Visit {
+            input: input.into(),
+            title: String::new(),
+            images: 0,
+            last_used: 0,
+        }
+        .kind();
+
+        assert_eq!(of("https://github.com/o/r/tree/main/images"), VisitKind::Repo);
+        assert_eq!(of("owner/repo"), VisitKind::Repo);
+        assert_eq!(of("https://imgur.com/gallery/dump-1Ur1STy"), VisitKind::Album);
+        assert_eq!(of("world of warcraft"), VisitKind::Search);
+        assert_eq!(of("illidan"), VisitKind::Search);
     }
 
     #[test]

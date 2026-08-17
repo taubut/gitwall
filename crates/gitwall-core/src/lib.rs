@@ -16,7 +16,7 @@ pub mod wallpaper;
 pub use cache::Cache;
 pub use colour::Swatch;
 pub use fetch::Fetcher;
-pub use library::{Favourite, Library, Visit};
+pub use library::{Favourite, Library, Visit, VisitKind};
 pub use source::{ImageEntry, Listing, RepoRef};
 pub use thumb::ThumbMeta;
 pub use wallpaper::Backend;

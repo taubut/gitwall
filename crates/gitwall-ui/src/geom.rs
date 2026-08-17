@@ -174,6 +174,37 @@ pub fn solid_polygon(outline: &[Pos2], color: Color32) -> Mesh {
     mesh
 }
 
+/// Soft radial glow: a triangle fan with the colour at the centre and full
+/// transparency at the rim.
+///
+/// egui has no gradient shape, and the start screen is otherwise a flat void.
+/// Premultiplied alpha means the rim must fade to transparent *black*, not to a
+/// transparent version of the colour, or the edge shows a ring.
+pub fn radial_glow(centre: Pos2, radius: f32, colour: Color32, segments: usize) -> Mesh {
+    let mut mesh = Mesh::default();
+    let uv = egui::epaint::WHITE_UV;
+    let segments = segments.max(6);
+
+    mesh.vertices.push(Vertex {
+        pos: centre,
+        uv,
+        color: colour,
+    });
+    for i in 0..segments {
+        let a = i as f32 / segments as f32 * std::f32::consts::TAU;
+        mesh.vertices.push(Vertex {
+            pos: centre + Vec2::new(a.cos(), a.sin()) * radius,
+            uv,
+            color: Color32::TRANSPARENT,
+        });
+    }
+    let n = segments as u32;
+    for i in 0..n {
+        mesh.add_triangle(0, 1 + i, 1 + (i + 1) % n);
+    }
+    mesh
+}
+
 /// Vertical linear gradient as a single quad with per-vertex colours — the
 /// cheapest way to get a gradient out of egui, which has no gradient shape.
 pub fn vertical_gradient(rect: egui::Rect, top: Color32, bottom: Color32) -> Mesh {
@@ -256,6 +287,17 @@ mod tests {
         let width = xs.iter().cloned().fold(f32::MIN, f32::max)
             - xs.iter().cloned().fold(f32::MAX, f32::min);
         assert!(width > 10.0, "outline width collapsed to {width}");
+    }
+
+    #[test]
+    fn glow_fades_to_transparent_at_the_rim() {
+        let g = radial_glow(Pos2::new(0.0, 0.0), 100.0, Color32::from_rgb(80, 90, 120), 12);
+        assert_eq!(g.vertices.len(), 13, "centre plus one ring");
+        assert!(g.vertices[0].color.a() > 0, "centre is visible");
+        for v in &g.vertices[1..] {
+            assert_eq!(v.color, Color32::TRANSPARENT, "rim must be fully transparent");
+        }
+        assert_eq!(g.indices.len(), 12 * 3);
     }
 
     #[test]

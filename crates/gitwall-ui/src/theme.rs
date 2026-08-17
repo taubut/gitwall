@@ -101,6 +101,44 @@ pub fn install_fonts(ctx: &egui::Context) -> Fonts {
     Fonts { display, mono }
 }
 
+/// egui's stock widget palette is built for opaque light or dark panels. This
+/// app draws widgets straight on top of a full-screen wallpaper, so the
+/// defaults read as bright cut-outs — most visibly the source field, which
+/// otherwise appears as a pale box in the corner.
+pub fn install_visuals(ctx: &egui::Context) {
+    let mut v = egui::Visuals::dark();
+
+    v.panel_fill = INK_900;
+    v.window_fill = INK_900;
+    v.override_text_color = Some(TEXT);
+
+    // Text-edit background.
+    v.extreme_bg_color = Color32::from_black_alpha(160);
+
+    v.selection.bg_fill = ACCENT_FALLBACK.gamma_multiply(0.35);
+    v.selection.stroke = egui::Stroke::new(1.0, TEXT);
+
+    let hairline = |a: u8| egui::Stroke::new(1.0, Color32::from_white_alpha(a));
+    for w in [
+        &mut v.widgets.noninteractive,
+        &mut v.widgets.inactive,
+        &mut v.widgets.hovered,
+        &mut v.widgets.active,
+        &mut v.widgets.open,
+    ] {
+        w.bg_fill = Color32::from_black_alpha(120);
+        w.weak_bg_fill = Color32::from_black_alpha(120);
+        w.bg_stroke = hairline(22);
+        w.fg_stroke = egui::Stroke::new(1.0, TEXT);
+        w.corner_radius = egui::CornerRadius::same(2);
+    }
+    v.widgets.hovered.bg_stroke = hairline(46);
+    // A focused field should be obvious without shouting.
+    v.widgets.active.bg_stroke = egui::Stroke::new(1.0, ACCENT_FALLBACK.gamma_multiply(0.8));
+
+    ctx.set_visuals(v);
+}
+
 /// Slice geometry for the current window size. Everything hangs off
 /// `slice_h`, so one number rescales the whole strip.
 #[derive(Clone, Copy)]

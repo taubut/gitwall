@@ -157,6 +157,7 @@ impl App {
         initial: Option<String>,
     ) -> Self {
         let fonts = theme::install_fonts(&cc.egui_ctx);
+        theme::install_visuals(&cc.egui_ctx);
         let library = Library::open(cache.data_root().to_path_buf());
         let bridge = crate::bridge::spawn(cc.egui_ctx.clone(), cache);
 
@@ -1114,7 +1115,123 @@ impl App {
     }
 }
 
+/// Vertical layout for the start screen, computed once so the text field (drawn
+/// as a real widget) and everything painted around it agree.
+struct HomeLayout {
+    mark: Pos2,
+    mark_h: f32,
+    wordmark: Pos2,
+    field: Rect,
+    hint: Pos2,
+    recent: Pos2,
+    rows_top: f32,
+    row_h: f32,
+    width: f32,
+    shown: usize,
+    hidden: usize,
+}
+
+impl App {
+    fn home_layout(&self, rect: Rect, entries: usize) -> HomeLayout {
+        let width = 620.0_f32.min(rect.width() - 96.0).max(280.0);
+        let row_h = 30.0;
+        let mark_h = 44.0;
+
+        // Never let a long history push the block off screen.
+        let max_rows = ((rect.height() * 0.40 / row_h) as usize).clamp(3, 14);
+        let shown = entries.min(max_rows);
+        let hidden = entries - shown;
+
+        let list_h = if shown == 0 {
+            0.0
+        } else {
+            26.0 + shown as f32 * row_h + if hidden > 0 { 22.0 } else { 0.0 }
+        };
+        let block = mark_h + 20.0 + 34.0 + 28.0 + 44.0 + 24.0 + 30.0 + list_h;
+
+        let cx = rect.center().x;
+        let mut y = rect.center().y - block * 0.5;
+
+        let mark = Pos2::new(cx, y + mark_h * 0.5);
+        y += mark_h + 20.0;
+        let wordmark = Pos2::new(cx, y);
+        y += 34.0 + 28.0;
+        let field = Rect::from_min_size(Pos2::new(cx - width * 0.5, y), Vec2::new(width, 44.0));
+        y += 44.0 + 24.0;
+        let hint = Pos2::new(cx, y);
+        y += 30.0;
+        let recent = Pos2::new(cx - width * 0.5, y);
+        let rows_top = y + 26.0;
+
+        HomeLayout {
+            mark,
+            mark_h,
+            wordmark,
+            field,
+            hint,
+            recent,
+            rows_top,
+            row_h,
+            width,
+            shown,
+            hidden,
+        }
+    }
+
+    /// The app's mark: the slice motif itself, drawn with the same geometry the
+    /// carousel uses rather than shipped as a bitmap.
+    fn paint_mark(&self, painter: &Painter, centre: Pos2, h: f32) {
+        let skew = h * 0.22;
+        let narrow = h * 0.14;
+        let wide = h * 0.5;
+        let gap = h * 0.07;
+        let widths = [narrow, narrow, wide, narrow, narrow];
+
+        let total: f32 = widths.iter().sum::<f32>() + gap * (widths.len() - 1) as f32;
+        let mut x = centre.x - total * 0.5 - skew * 0.5;
+        let top = centre.y - h * 0.5;
+
+        for (i, w) in widths.iter().enumerate() {
+            let quad = geom::slice_quad(x, top, *w, h, skew);
+            let outline = geom::rounded_outline(&quad, h * 0.07, 3);
+            let colour = match i {
+                2 => theme::ACCENT_FALLBACK,
+                1 | 3 => Color32::from_rgb(0x3a, 0x42, 0x54),
+                _ => Color32::from_rgb(0x22, 0x28, 0x34),
+            };
+            painter.add(geom::solid_polygon(&outline, colour));
+            x += w + gap;
+        }
+    }
+}
+
 /* ----------------------------------------------------------------- paint -- */
+
+/// Truncate `text` with an ellipsis so it fits `max_w`.
+///
+/// egui's painter draws text without wrapping or eliding, and both Imgur image
+/// names and history titles can be a full sentence.
+fn fit(painter: &Painter, text: &str, font: &FontId, max_w: f32) -> String {
+    let width = |t: String| {
+        painter
+            .layout_no_wrap(t, font.clone(), Color32::WHITE)
+            .size()
+            .x
+    };
+    if width(text.to_owned()) <= max_w {
+        return text.to_owned();
+    }
+    let chars: Vec<char> = text.chars().collect();
+    let mut n = chars.len();
+    while n > 1 {
+        n -= 1;
+        let candidate: String = chars[..n].iter().collect::<String>() + "…";
+        if width(candidate.clone()) <= max_w {
+            return candidate;
+        }
+    }
+    "…".to_owned()
+}
 
 fn human_bytes(n: u64) -> String {
     if n == 0 {
@@ -1456,24 +1573,37 @@ impl eframe::App for App {
         }
 
         // ---- top bar ---------------------------------------------------
-        painter.text(
-            Pos2::new(rect.left() + pad, rect.top() + 30.0),
-            Align2::LEFT_CENTER,
-            "G I T W A L L",
-            FontId::new(11.0, mono.clone()),
-            theme::FAINT,
-        );
+        let home = matches!(self.screen, Screen::Empty);
+        let layout = self.home_layout(rect, self.library.history().len());
 
-        let field = Rect::from_min_size(
-            Pos2::new(rect.left() + pad + 130.0, rect.top() + 16.0),
-            Vec2::new(460.0, 30.0),
-        );
+        // On the start screen the field is the subject, so it sits centred with
+        // the mark; once a collection is open it retreats to the corner.
+        if !home {
+            painter.text(
+                Pos2::new(rect.left() + pad, rect.top() + 30.0),
+                Align2::LEFT_CENTER,
+                "G I T W A L L",
+                FontId::new(11.0, mono.clone()),
+                theme::FAINT,
+            );
+        }
+
+        let field = if home {
+            layout.field
+        } else {
+            Rect::from_min_size(
+                Pos2::new(rect.left() + pad + 130.0, rect.top() + 16.0),
+                Vec2::new(460.0, 30.0),
+            )
+        };
         let edit = ui.put(
             field,
             egui::TextEdit::singleline(&mut self.url)
                 .id(repo_field())
-                .font(FontId::new(13.0, mono.clone()))
+                .font(FontId::new(if home { 15.0 } else { 13.0 }, mono.clone()))
                 .hint_text("repo URL, imgur album, or search")
+                .vertical_align(Align2::LEFT_CENTER.y())
+                .margin(egui::Margin::symmetric(14, 0))
                 .desired_width(f32::INFINITY),
         );
         if edit.lost_focus() && ctx.input(|i| i.key_pressed(Key::Enter)) {
@@ -1678,62 +1808,104 @@ impl eframe::App for App {
         match &self.screen {
             Screen::Empty => {
                 let history: Vec<Visit> = self.library.history().to_vec();
-                if history.is_empty() {
+
+                // A flat near-black screen reads as a void. One soft glow gives
+                // the block something to sit on.
+                painter.add(geom::radial_glow(
+                    Pos2::new(rect.center().x, layout.mark.y + 160.0),
+                    (rect.height() * 0.62).max(320.0),
+                    Color32::from_rgba_premultiplied(15, 18, 27, 210),
+                    48,
+                ));
+
+                self.paint_mark(&painter, layout.mark, layout.mark_h);
+
+                painter.text(
+                    layout.wordmark,
+                    Align2::CENTER_TOP,
+                    "gitwall",
+                    FontId::new(34.0, display.clone()),
+                    theme::TEXT,
+                );
+
+                painter.text(
+                    layout.hint,
+                    Align2::CENTER_TOP,
+                    if history.is_empty() {
+                        "Paste a repo or album link — or just type what you want"
+                    } else {
+                        "Paste a link, type to search, or pick one below"
+                    },
+                    FontId::new(11.5, mono.clone()),
+                    theme::FAINT,
+                );
+
+                if layout.shown > 0 {
                     painter.text(
-                        rect.center(),
-                        Align2::CENTER_CENTER,
-                        "Point it at a repo.",
-                        FontId::new(64.0, display.clone()),
-                        theme::TEXT,
+                        layout.recent,
+                        Align2::LEFT_TOP,
+                        "RECENT",
+                        FontId::new(10.0, mono.clone()),
+                        theme::FAINT,
                     );
-                    painter.text(
-                        rect.center() + Vec2::new(0.0, 48.0),
-                        Align2::CENTER_CENTER,
-                        "A GitHub repo, an Imgur album, or just type what you want.",
-                        FontId::new(14.0, mono.clone()),
-                        theme::DIM,
-                    );
-                } else {
-                    let top = rect.center().y - (history.len() as f32 * 34.0) / 2.0 - 40.0;
-                    painter.text(
-                        Pos2::new(rect.center().x, top - 34.0),
-                        Align2::CENTER_BOTTOM,
-                        "Pick up where you left off",
-                        FontId::new(30.0, display.clone()),
-                        theme::TEXT,
-                    );
+
                     let mut open: Option<String> = None;
                     let mut forget: Option<usize> = None;
-                    for (i, v) in history.iter().enumerate() {
-                        let r = Rect::from_center_size(
-                            Pos2::new(rect.center().x, top + i as f32 * 34.0),
-                            Vec2::new(560.0, 30.0),
+
+                    for (i, v) in history.iter().take(layout.shown).enumerate() {
+                        let r = Rect::from_min_size(
+                            Pos2::new(
+                                rect.center().x - layout.width * 0.5,
+                                layout.rows_top + i as f32 * layout.row_h,
+                            ),
+                            Vec2::new(layout.width, layout.row_h - 2.0),
                         );
                         let del = Rect::from_center_size(
-                            Pos2::new(r.right() - 18.0, r.center().y),
+                            Pos2::new(r.right() - 16.0, r.center().y),
                             Vec2::splat(22.0),
                         );
                         // Order matters: egui puts whatever is registered last
                         // on top, so the row has to go first for the delete
                         // target to receive the click at all.
-                        let row_resp =
-                            ui.interact(r, egui::Id::new(("hist", i)), Sense::click());
+                        let row_resp = ui.interact(r, egui::Id::new(("hist", i)), Sense::click());
                         let del_resp =
                             ui.interact(del, egui::Id::new(("hist-del", i)), Sense::click());
 
                         let on = i == self.home_pick || row_resp.hovered();
                         if on {
-                            painter.rect_filled(r, 2.0, Color32::from_white_alpha(16));
+                            painter.rect_filled(r, 2.0, Color32::from_white_alpha(13));
+                            // A bar rather than a border: it marks the row
+                            // without boxing it in.
+                            painter.rect_filled(
+                                Rect::from_min_size(r.left_top(), Vec2::new(2.0, r.height())),
+                                0.0,
+                                self.accent,
+                            );
                         }
+
+                        // What kind of source this is, so the list reads as
+                        // structured rather than as a wall of identical text.
                         painter.text(
-                            Pos2::new(r.left() + 14.0, r.center().y),
+                            Pos2::new(r.left() + 16.0, r.center().y),
                             Align2::LEFT_CENTER,
-                            v.label(),
-                            FontId::new(13.0, mono.clone()),
+                            v.kind().label(),
+                            FontId::new(10.0, mono.clone()),
+                            if on { self.accent } else { theme::FAINT },
+                        );
+
+                        let title_font = FontId::new(13.0, mono.clone());
+                        let title_x = r.left() + 82.0;
+                        let room = (del.left() - 56.0) - title_x;
+                        painter.text(
+                            Pos2::new(title_x, r.center().y),
+                            Align2::LEFT_CENTER,
+                            fit(&painter, &v.label(), &title_font, room.max(40.0)),
+                            title_font,
                             if on { theme::TEXT } else { theme::DIM },
                         );
+
                         painter.text(
-                            Pos2::new(del.left() - 12.0, r.center().y),
+                            Pos2::new(del.left() - 14.0, r.center().y),
                             Align2::RIGHT_CENTER,
                             format!("{}", v.images),
                             FontId::new(11.0, mono.clone()),
@@ -1749,7 +1921,7 @@ impl eframe::App for App {
                             } else if on {
                                 theme::FAINT
                             } else {
-                                Color32::from_white_alpha(40)
+                                Color32::from_white_alpha(34)
                             },
                         );
 
@@ -1758,6 +1930,19 @@ impl eframe::App for App {
                         } else if row_resp.clicked() && !del_resp.hovered() {
                             open = Some(v.input.clone());
                         }
+                    }
+
+                    if layout.hidden > 0 {
+                        painter.text(
+                            Pos2::new(
+                                rect.center().x - layout.width * 0.5 + 16.0,
+                                layout.rows_top + layout.shown as f32 * layout.row_h + 4.0,
+                            ),
+                            Align2::LEFT_TOP,
+                            format!("+{} older", layout.hidden),
+                            FontId::new(10.5, mono.clone()),
+                            Color32::from_white_alpha(48),
+                        );
                     }
 
                     if let Some(i) = forget {
@@ -1810,15 +1995,21 @@ impl eframe::App for App {
                     let base = rect.bottom() - 76.0;
                     let starred = self.library.is_favourite(&row.key);
 
+                    let title_font =
+                        FontId::new((rect.width() * 0.024).clamp(30.0, 58.0), display.clone());
+                    let title = if starred {
+                        format!("★ {}", row.name)
+                    } else {
+                        row.name.clone()
+                    };
+                    // Imgur names can be a full sentence; leave room for the
+                    // apply button rather than running underneath it.
+                    let title_room = rect.width() - pad * 2.0 - 230.0;
                     painter.text(
                         Pos2::new(rect.left() + pad, base),
                         Align2::LEFT_BOTTOM,
-                        if starred {
-                            format!("★ {}", row.name)
-                        } else {
-                            row.name.clone()
-                        },
-                        FontId::new((rect.width() * 0.024).clamp(30.0, 58.0), display.clone()),
+                        fit(&painter, &title, &title_font, title_room),
+                        title_font,
                         theme::TEXT,
                     );
 
