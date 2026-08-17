@@ -28,6 +28,34 @@ const MAX_BYTES: u64 = 64 * 1024 * 1024;
 const ATTEMPTS: usize = 3;
 const REQUEST_TIMEOUT: Duration = Duration::from_secs(30);
 
+/// Pick the file extension for a cached original.
+///
+/// This has to be right: the applied wallpaper is named with it, and the
+/// desktop classifies files by extension. A JPEG saved as `.img` is reported by
+/// xdg-mime as `application/vnd.efi.img` — a disk image — and GNOME silently
+/// refuses to use it as a background even though the pixels load fine.
+///
+/// The URL is the most reliable source, since it names the actual file being
+/// fetched. Labels are not: Imgur and Wallhaven identify images by a bare id
+/// with no extension at all.
+fn ext_for(label: &str, urls: &[String]) -> String {
+    let from = |s: &str| -> Option<String> {
+        // Drop any query or fragment before looking for the extension.
+        let path = s.split(['?', '#']).next().unwrap_or(s);
+        let ext = path.rsplit_once('.')?.1.to_ascii_lowercase();
+        crate::source::IMAGE_EXTS
+            .contains(&ext.as_str())
+            .then_some(ext)
+    };
+
+    urls.iter()
+        .find_map(|u| from(u))
+        .or_else(|| from(label))
+        // Never "img". A plausible image extension is far safer than one the
+        // desktop reads as a disk image.
+        .unwrap_or_else(|| "jpg".to_string())
+}
+
 pub struct Fetcher {
     http: reqwest::Client,
     sem: Arc<Semaphore>,
@@ -226,11 +254,7 @@ impl Fetcher {
         label: &str,
         urls: [String; 2],
     ) -> Result<PathBuf> {
-        let ext = label
-            .rsplit_once('.')
-            .map(|(_, e)| e.to_ascii_lowercase())
-            .unwrap_or_else(|| "img".to_string());
-
+        let ext = ext_for(label, &urls);
         let path = cache.full_path(sha, &ext);
         if path.exists() {
             return Ok(path);
@@ -260,6 +284,50 @@ impl Fetcher {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn extension_comes_from_the_url_not_the_label() {
+        // Imgur and Wallhaven label images with a bare id.
+        assert_eq!(
+            ext_for("EilecxS", &["https://i.imgur.com/EilecxS.jpeg".into()]),
+            "jpeg"
+        );
+        assert_eq!(
+            ext_for(
+                "e77g8k",
+                &["https://w.wallhaven.cc/full/e7/wallhaven-e77g8k.jpg".into()]
+            ),
+            "jpg"
+        );
+        // GitHub labels are paths and work either way.
+        assert_eq!(
+            ext_for(
+                "images/foo.png",
+                &["https://cdn.jsdelivr.net/gh/o/r@abc/images/foo.png".into()]
+            ),
+            "png"
+        );
+    }
+
+    #[test]
+    fn never_yields_img_which_the_desktop_reads_as_a_disk_image() {
+        // No extension anywhere: must still be something usable.
+        let e = ext_for("EilecxS", &["https://i.imgur.com/EilecxS".into()]);
+        assert_ne!(e, "img", "`.img` is detected as application/vnd.efi.img");
+        assert!(crate::source::IMAGE_EXTS.contains(&e.as_str()));
+    }
+
+    #[test]
+    fn query_strings_and_junk_extensions_are_ignored() {
+        assert_eq!(
+            ext_for("x", &["https://host/a/b.png?w=400&fit=cover".into()]),
+            "png"
+        );
+        // ".com" is not an image extension, so it must not be taken as one.
+        assert_eq!(ext_for("x", &["https://i.imgur.com".into()]), "jpg");
+        // Falls through to the label when the URL has nothing.
+        assert_eq!(ext_for("photo.webp", &["https://host/opaque".into()]), "webp");
+    }
 
     #[tokio::test]
     async fn key_locks_are_shared_then_reclaimed() {

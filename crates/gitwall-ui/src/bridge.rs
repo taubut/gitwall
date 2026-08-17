@@ -371,7 +371,7 @@ fn rows_from_hits(hits: &[gitwall_core::wallhaven::Hit]) -> Vec<Row> {
         .map(|h| Row {
             key: h.id.clone(),
             name: h.id.clone(),
-            label: h.id.clone(),
+            label: format!("{}.{}", h.id, h.ext),
             group: String::new(),
             ext: h.ext.to_ascii_uppercase(),
             size: h.size,
@@ -433,7 +433,7 @@ async fn resolve_imgur(
         .map(|it| Row {
             key: it.id.clone(),
             name: it.name.clone(),
-            label: it.id.clone(),
+            label: format!("{}.{}", it.id, it.ext),
             // Imgur albums are flat — no sections to filter by.
             group: String::new(),
             ext: it.ext.to_ascii_uppercase(),
