@@ -1,0 +1,24 @@
+[package]
+name = "gitwall"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+description = "Browse a GitHub repo of wallpapers and set one"
+default-run = "gitwall"
+
+[dependencies]
+gitwall-core = { path = "../gitwall-core" }
+
+# wgpu backend only: this exists because WebKitGTK's compositing path is
+# unusable on NVIDIA here. Vulkan via wgpu is the whole point.
+eframe = { version = "0.36", default-features = false, features = [
+  "wgpu",
+  "wayland",
+  "x11",
+  "default_fonts",
+] }
+egui = "0.36"
+
+image.workspace = true
+tokio.workspace = true
+reqwest.workspace = true

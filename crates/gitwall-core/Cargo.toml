@@ -1,0 +1,23 @@
+[package]
+name = "gitwall-core"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+
+# NOTE: this crate must never depend on tauri. All GitHub, cache, image and
+# wallpaper logic lives here so the UI shell stays swappable and so the whole
+# thing is testable with plain `cargo test` on a headless machine.
+
+[dependencies]
+thiserror.workspace = true
+serde.workspace = true
+serde_json.workspace = true
+tokio.workspace = true
+reqwest.workspace = true
+image.workspace = true
+futures.workspace = true
+dirs.workspace = true
+tracing.workspace = true
+
+[dev-dependencies]
+tokio = { version = "1", features = ["rt-multi-thread", "macros", "test-util"] }

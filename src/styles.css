@@ -1,0 +1,676 @@
+/* gitwall
+ *
+ * Two ideas drive this sheet:
+ *
+ * 1. The chrome borrows its colour from whatever image is focused. Everything
+ *    chromatic reads from --accent, which JS rewrites per selection.
+ * 2. Type echoes the mechanic. The panels are compressed, so the display face
+ *    is Fira Sans Compressed. Everything the machine knows — paths, shas,
+ *    counts, dimensions — is set in mono, because all of it is machine text.
+ */
+
+:root {
+  --ink-900: #07080b;
+  --ink-800: #0b0d12;
+  --ink-700: #11141c;
+  --ink-600: #191e28;
+
+  --line: rgba(255, 255, 255, 0.075);
+  --line-2: rgba(255, 255, 255, 0.16);
+
+  --text: #f2f4f9;
+  --dim: #a2a9ba;
+  --faint: #7b8398;
+
+  /* The backdrop is a live wallpaper preview, so text sits on unpredictable
+     colour. A soft shadow keeps it readable without a heavier scrim. */
+  --text-lift: 0 1px 3px rgba(0, 0, 0, 0.55), 0 2px 22px rgba(0, 0, 0, 0.45);
+
+  /* Overwritten by JS from the focused image. */
+  --accent: #7fd4e8;
+
+  --display: "Fira Sans Compressed", "Fira Sans Condensed", "Fira Sans",
+    system-ui, sans-serif;
+  --body: "Fira Sans", "Adwaita Sans", system-ui, sans-serif;
+  --mono: "JetBrains Mono", "Adwaita Mono", ui-monospace, monospace;
+
+  /* Slice geometry. All of these are written by JS, which derives them from
+     the slice height the way skwd-wall's presets do — the lean is a fixed
+     pixel offset over the panel height, not a fixed angle. */
+  --shear: -9.1deg;
+  --panel-h: 432px;
+  /* Horizontal sweep the shear introduces over the panel height. The inner
+     wrapper is widened by exactly this much so the counter-skew can never
+     expose a corner. */
+  --skew-comp: 69px;
+  --radius: 12px;
+
+  /* Matching skwd-wall: animExpand 350ms, Easing.OutCubic. */
+  --ease: cubic-bezier(0.215, 0.61, 0.355, 1);
+  --dur: 350ms;
+  --dur-fast: 200ms;
+
+  --pad: clamp(20px, 3.2vw, 52px);
+}
+
+* {
+  box-sizing: border-box;
+}
+
+/* A class that sets `display` outranks the UA's `[hidden] { display: none }`,
+   so .working (display:flex) would otherwise ignore the attribute entirely. */
+[hidden] {
+  display: none !important;
+}
+
+html,
+body {
+  height: 100%;
+  margin: 0;
+  overflow: hidden;
+}
+
+body {
+  background: var(--ink-900);
+  color: var(--text);
+  font-family: var(--body);
+  display: grid;
+  grid-template-rows: auto 1fr auto auto;
+  user-select: none;
+  cursor: default;
+}
+
+/* ---------------------------------------------------------------- ambient */
+
+.ambient {
+  position: fixed;
+  inset: -12%;
+  z-index: 0;
+  background-size: cover;
+  background-position: center;
+  /* The focused wallpaper, filling the screen: scrolling the strip previews
+     each wallpaper full-size, so the whole screen changes as you browse.
+     Blur ONLY — no saturate, no brightness, nothing that recolours the
+     wallpaper. What you see here is what you are about to set. Sized in vh so
+     it looks the same on a 900px window and a 1440p display. */
+  filter: blur(1.3vh);
+  opacity: 0;
+  transition: opacity 520ms var(--ease);
+  will-change: opacity;
+}
+
+.ambient.is-live {
+  opacity: 1;
+}
+
+.scrim {
+  position: fixed;
+  inset: 0;
+  z-index: 1;
+  pointer-events: none;
+  /* Neutral black only, and only directly behind the two text zones. The
+     middle of the screen is left completely untouched so the wallpaper shows
+     through uncoloured. */
+  background: linear-gradient(
+    to bottom,
+    rgba(0, 0, 0, 0.74) 0%,
+    rgba(0, 0, 0, 0.26) 9%,
+    rgba(0, 0, 0, 0) 19%,
+    rgba(0, 0, 0, 0) 68%,
+    rgba(0, 0, 0, 0.5) 88%,
+    rgba(0, 0, 0, 0.84) 100%
+  );
+}
+
+body > *:not(.ambient):not(.scrim) {
+  position: relative;
+  z-index: 2;
+}
+
+/* ------------------------------------------------------------------- bar */
+
+.bar {
+  display: grid;
+  grid-template-columns: auto minmax(0, 1fr) auto;
+  align-items: center;
+  gap: clamp(16px, 2.4vw, 36px);
+  padding: clamp(16px, 2vh, 26px) var(--pad);
+}
+
+.mark {
+  font-family: var(--mono);
+  font-size: 11px;
+  font-weight: 500;
+  letter-spacing: 0.34em;
+  text-transform: uppercase;
+  color: var(--faint);
+  text-shadow: var(--text-lift);
+  -webkit-app-region: drag;
+}
+
+.source {
+  display: flex;
+  align-items: center;
+  gap: 12px;
+  max-width: 620px;
+  padding: 0 6px 0 16px;
+  height: 42px;
+  border: 1px solid var(--line);
+  border-radius: 2px;
+  background: rgba(11, 13, 18, 0.55);
+  backdrop-filter: blur(20px);
+  transition: border-color 220ms var(--ease), background 220ms var(--ease);
+}
+
+.source:focus-within {
+  border-color: color-mix(in srgb, var(--accent) 55%, transparent);
+  background: rgba(11, 13, 18, 0.78);
+}
+
+/* State dot: dim until a repo is pinned, then it takes the accent. Encodes
+   whether the gallery is live, rather than decorating the field. */
+.source__sigil {
+  width: 6px;
+  height: 6px;
+  flex: 0 0 auto;
+  border-radius: 50%;
+  background: var(--faint);
+  font-size: 0;
+  transition: background 400ms var(--ease), box-shadow 400ms var(--ease);
+}
+
+body[data-state="loaded"] .source__sigil {
+  background: var(--accent);
+  box-shadow: 0 0 12px color-mix(in srgb, var(--accent) 70%, transparent);
+}
+
+.source__input {
+  flex: 1 1 auto;
+  min-width: 0;
+  border: 0;
+  background: none;
+  color: var(--text);
+  font-family: var(--mono);
+  font-size: 13px;
+  letter-spacing: -0.01em;
+  outline: none;
+  user-select: text;
+  cursor: text;
+}
+
+.source__input::placeholder {
+  color: var(--faint);
+}
+
+.source__go {
+  flex: 0 0 auto;
+  height: 30px;
+  padding: 0 14px;
+  border: 0;
+  border-radius: 2px;
+  background: rgba(255, 255, 255, 0.06);
+  color: var(--dim);
+  font-family: var(--mono);
+  font-size: 11px;
+  letter-spacing: 0.08em;
+  text-transform: uppercase;
+  cursor: pointer;
+  transition: background 180ms var(--ease), color 180ms var(--ease);
+}
+
+.source__go:hover {
+  background: rgba(255, 255, 255, 0.11);
+  color: var(--text);
+}
+
+.pinned {
+  margin: 0;
+  font-family: var(--mono);
+  font-size: 11px;
+  letter-spacing: 0.02em;
+  color: var(--faint);
+  text-shadow: var(--text-lift);
+  text-align: right;
+  white-space: nowrap;
+}
+
+.pinned b {
+  font-weight: 500;
+  color: var(--dim);
+}
+
+/* ----------------------------------------------------------------- stage */
+
+.stage {
+  position: relative;
+  display: grid;
+  place-items: center;
+  min-height: 0;
+  overflow: hidden;
+  /* No mask here — each slice fades itself by distance from the focus, the way
+     skwd-wall does it. A mask on top of that would double-darken the ends. */
+}
+
+.strip {
+  position: absolute;
+  top: 50%;
+  left: 0;
+  height: var(--panel-h);
+  width: 100%;
+  margin-top: calc(var(--panel-h) / -2);
+}
+
+body:not([data-state="loaded"]) .strip {
+  display: none;
+}
+
+/* Applied for one frame when the strip is built or the window resizes, so
+   slices snap to their starting geometry instead of animating out of nothing. */
+.strip.is-still .panel {
+  transition: none !important;
+}
+
+/* ---------------------------------------------------------------- panels */
+
+.panel {
+  position: absolute;
+  top: 0;
+  left: 0;
+  height: 100%;
+  overflow: hidden;
+  border-radius: var(--radius);
+  background: var(--ink-700);
+  /* Slices overlap (gap is negative), so the shear reads as a stack of cards
+     rather than a row of bars. JS sets transform, width, opacity and z-index. */
+  transform: translateX(0) skewX(var(--shear));
+  transition: transform var(--dur) var(--ease), width var(--dur) var(--ease),
+    box-shadow var(--dur) var(--ease), opacity var(--dur-fast) linear;
+  cursor: pointer;
+  outline: none;
+}
+
+.panel::after {
+  content: "";
+  position: absolute;
+  inset: 0;
+  pointer-events: none;
+  border-radius: inherit;
+  box-shadow: inset 0 0 0 1px var(--line);
+  transition: box-shadow var(--dur) var(--ease);
+}
+
+/* Unfocused panels sit back: darkened and slightly desaturated so the focused
+   one is unmistakably the subject. */
+.panel__inner {
+  position: absolute;
+  top: 0;
+  bottom: 0;
+  left: calc(var(--skew-comp) / -2);
+  width: calc(100% + var(--skew-comp));
+  transform: skewX(calc(-1 * var(--shear)));
+  filter: brightness(0.38) saturate(0.62);
+  transition: filter var(--dur) var(--ease);
+}
+
+.panel__inner img {
+  width: 100%;
+  height: 100%;
+  object-fit: cover;
+  display: block;
+  opacity: 0;
+  transition: opacity 420ms var(--ease);
+}
+
+.panel__inner img.is-in {
+  opacity: 1;
+}
+
+/* z-index comes from JS (it depends on distance from the focus), so it is
+   deliberately absent here. */
+/* Lifted hard off the backdrop — the preview behind is now a bright, busy
+   image, so the focused slice needs real separation. */
+.panel.is-focused {
+  box-shadow: 0 30px 70px -12px rgba(0, 0, 0, 0.9),
+    0 0 0 1px rgba(0, 0, 0, 0.45),
+    0 0 44px -4px color-mix(in srgb, var(--accent) 45%, transparent);
+}
+
+.panel.is-focused::after {
+  box-shadow: inset 0 0 0 2px var(--accent);
+}
+
+.panel.is-focused .panel__inner {
+  filter: none;
+}
+
+.panel:hover:not(.is-focused) .panel__inner {
+  filter: brightness(0.62) saturate(0.8);
+}
+
+.panel:focus-visible::after {
+  box-shadow: inset 0 0 0 2px var(--accent);
+}
+
+/* Not yet fetched: a slow diagonal sweep, angled to match the shear. */
+.panel--pending .panel__inner {
+  background: linear-gradient(
+    100deg,
+    var(--ink-700) 0%,
+    var(--ink-600) 48%,
+    var(--ink-700) 100%
+  );
+  background-size: 300% 100%;
+  animation: sweep 2.6s ease-in-out infinite;
+}
+
+@keyframes sweep {
+  0% {
+    background-position: 130% 0;
+  }
+  100% {
+    background-position: -30% 0;
+  }
+}
+
+/* Failed to decode or download. Honest, and visibly different from pending. */
+.panel--failed .panel__inner {
+  background: repeating-linear-gradient(
+    100deg,
+    var(--ink-700),
+    var(--ink-700) 6px,
+    rgba(255, 90, 90, 0.07) 6px,
+    rgba(255, 90, 90, 0.07) 12px
+  );
+  animation: none;
+}
+
+/* ------------------------------------------------- invite / working / fault */
+
+.invite,
+.working,
+.fault {
+  max-width: 620px;
+  padding: 0 var(--pad);
+  text-align: center;
+}
+
+.invite__head {
+  margin: 0 0 14px;
+  font-family: var(--display);
+  font-size: clamp(44px, 6vw, 82px);
+  font-weight: 500;
+  letter-spacing: -0.015em;
+  line-height: 0.98;
+  color: var(--text);
+}
+
+.invite__sub {
+  margin: 0 0 30px;
+  font-size: 15px;
+  line-height: 1.55;
+  color: var(--dim);
+}
+
+.chip {
+  font-family: var(--mono);
+  font-size: 12px;
+  color: var(--dim);
+  padding: 9px 16px;
+  border: 1px solid var(--line);
+  border-radius: 2px;
+  background: rgba(255, 255, 255, 0.03);
+  cursor: pointer;
+  transition: border-color 200ms var(--ease), color 200ms var(--ease),
+    background 200ms var(--ease);
+}
+
+.chip:hover {
+  border-color: color-mix(in srgb, var(--accent) 45%, transparent);
+  background: rgba(255, 255, 255, 0.06);
+  color: var(--text);
+}
+
+.working {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  gap: 14px;
+}
+
+.working__pulse {
+  width: 7px;
+  height: 7px;
+  border-radius: 50%;
+  background: var(--accent);
+  animation: pulse 1.15s ease-in-out infinite;
+}
+
+@keyframes pulse {
+  0%,
+  100% {
+    opacity: 0.25;
+    transform: scale(0.8);
+  }
+  50% {
+    opacity: 1;
+    transform: scale(1.15);
+  }
+}
+
+.working__text {
+  margin: 0;
+  font-family: var(--mono);
+  font-size: 13px;
+  color: var(--dim);
+}
+
+.fault__head {
+  margin: 0 0 12px;
+  font-family: var(--display);
+  font-size: clamp(30px, 3.6vw, 46px);
+  font-weight: 500;
+  letter-spacing: -0.01em;
+  color: var(--text);
+}
+
+.fault__body {
+  margin: 0;
+  font-family: var(--mono);
+  font-size: 12.5px;
+  line-height: 1.7;
+  color: var(--dim);
+  word-break: break-word;
+}
+
+/* ---------------------------------------------------------------- detail */
+
+.detail {
+  display: grid;
+  grid-template-columns: minmax(0, 1fr) auto;
+  align-items: end;
+  gap: 28px;
+  padding: clamp(14px, 2vh, 24px) var(--pad) 0;
+}
+
+.detail__title {
+  margin: 0 0 8px;
+  font-family: var(--display);
+  font-size: clamp(34px, 4.2vw, 60px);
+  font-weight: 500;
+  line-height: 0.95;
+  letter-spacing: -0.012em;
+  color: var(--text);
+  text-shadow: var(--text-lift);
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+
+.detail__specs {
+  margin: 0;
+  font-family: var(--mono);
+  font-size: 11.5px;
+  letter-spacing: 0.02em;
+  color: var(--faint);
+  text-shadow: var(--text-lift);
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+
+.detail__specs em {
+  font-style: normal;
+  color: var(--dim);
+}
+
+.detail__act {
+  display: flex;
+  flex-direction: column;
+  align-items: flex-end;
+  gap: 12px;
+}
+
+.apply {
+  height: 44px;
+  padding: 0 26px;
+  border: 1px solid color-mix(in srgb, var(--accent) 45%, transparent);
+  border-radius: 2px;
+  background: color-mix(in srgb, var(--accent) 13%, transparent);
+  color: var(--text);
+  font-family: var(--mono);
+  font-size: 12px;
+  font-weight: 500;
+  letter-spacing: 0.1em;
+  text-transform: uppercase;
+  white-space: nowrap;
+  cursor: pointer;
+  transition: background 220ms var(--ease), border-color 220ms var(--ease),
+    transform 120ms var(--ease);
+}
+
+.apply:hover:not(:disabled) {
+  background: color-mix(in srgb, var(--accent) 24%, transparent);
+  border-color: var(--accent);
+}
+
+.apply:active:not(:disabled) {
+  transform: translateY(1px);
+}
+
+.apply:disabled {
+  opacity: 0.5;
+  cursor: progress;
+}
+
+.keys {
+  margin: 0;
+  font-family: var(--mono);
+  font-size: 10.5px;
+  color: var(--faint);
+  text-shadow: var(--text-lift);
+  display: flex;
+  align-items: center;
+  gap: 6px;
+}
+
+.keys kbd {
+  font: inherit;
+  color: var(--dim);
+}
+
+.keys__sep {
+  width: 1px;
+  height: 9px;
+  margin: 0 5px;
+  background: var(--line-2);
+}
+
+/* ------------------------------------------------------------------ rail */
+
+.rail {
+  display: grid;
+  grid-template-columns: minmax(0, 1fr) auto;
+  align-items: center;
+  gap: 18px;
+  padding: clamp(14px, 2vh, 22px) var(--pad) clamp(16px, 2.4vh, 28px);
+}
+
+.rail__track {
+  height: 1px;
+  background: var(--line);
+  overflow: hidden;
+}
+
+.rail__fill {
+  height: 100%;
+  width: 0;
+  background: var(--accent);
+  transition: width var(--dur) var(--ease), background var(--dur) var(--ease);
+}
+
+.rail__count {
+  margin: 0;
+  font-family: var(--mono);
+  font-size: 11px;
+  font-variant-numeric: tabular-nums;
+  letter-spacing: 0.06em;
+  color: var(--faint);
+  text-shadow: var(--text-lift);
+}
+
+.rail__track {
+  box-shadow: 0 1px 6px rgba(0, 0, 0, 0.5);
+}
+
+.rail__count b {
+  font-weight: 500;
+  color: var(--dim);
+}
+
+/* ----------------------------------------------------------------- toast */
+
+.toast {
+  position: fixed;
+  left: 50%;
+  bottom: 8vh;
+  z-index: 30;
+  transform: translate(-50%, 14px);
+  padding: 11px 20px;
+  border: 1px solid var(--line-2);
+  border-radius: 2px;
+  background: rgba(11, 13, 18, 0.94);
+  backdrop-filter: blur(24px);
+  font-family: var(--mono);
+  font-size: 12px;
+  color: var(--text);
+  opacity: 0;
+  pointer-events: none;
+  transition: opacity 260ms var(--ease), transform 260ms var(--ease);
+}
+
+.toast.is-up {
+  opacity: 1;
+  transform: translate(-50%, 0);
+}
+
+.toast[data-tone="bad"] {
+  border-color: rgba(255, 120, 120, 0.4);
+  color: #ffc9c9;
+}
+
+/* ------------------------------------------------------------ a11y / motion */
+
+:focus-visible {
+  outline: 2px solid var(--accent);
+  outline-offset: 2px;
+}
+
+@media (prefers-reduced-motion: reduce) {
+  *,
+  *::before,
+  *::after {
+    transition-duration: 0.01ms !important;
+    animation-duration: 0.01ms !important;
+    animation-iteration-count: 1 !important;
+  }
+}

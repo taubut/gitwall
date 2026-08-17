@@ -1,0 +1,20 @@
+[package]
+name = "gitwall"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+description = "Browse a GitHub repo of wallpapers and set one"
+default-run = "gitwall"
+
+[build-dependencies]
+tauri-build = { version = "2", features = [] }
+
+[dependencies]
+gitwall-core = { path = "../crates/gitwall-core" }
+# `protocol-asset` backs the asset: scheme the webview uses to read cached
+# thumbnails off disk; it must match app.security.assetProtocol in the config.
+tauri = { version = "2", features = ["protocol-asset"] }
+serde.workspace = true
+serde_json.workspace = true
+tokio.workspace = true
+reqwest.workspace = true

@@ -1,0 +1,88 @@
+<!DOCTYPE html>
+<html lang="en">
+  <head>
+    <meta charset="UTF-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+    <title>gitwall</title>
+    <link rel="stylesheet" href="styles.css" />
+  </head>
+  <body data-state="empty">
+    <!-- Two layers so one can fade in while the other fades out. -->
+    <div class="ambient" id="ambient-a" aria-hidden="true"></div>
+    <div class="ambient" id="ambient-b" aria-hidden="true"></div>
+    <div class="scrim" aria-hidden="true"></div>
+
+    <header class="bar">
+      <div class="mark" data-tauri-drag-region>gitwall</div>
+
+      <form class="source" id="source-form" autocomplete="off">
+        <span class="source__sigil" aria-hidden="true">⌥</span>
+        <input
+          class="source__input"
+          id="repo-input"
+          type="text"
+          spellcheck="false"
+          autocapitalize="off"
+          placeholder="github.com/owner/repo"
+          aria-label="GitHub repository"
+        />
+        <button class="source__go" type="submit" id="source-go">Load</button>
+      </form>
+
+      <p class="pinned" id="pinned"></p>
+    </header>
+
+    <main class="stage" id="stage">
+      <!-- Nothing loaded yet: the screen asks for the one thing it needs. -->
+      <section class="invite" id="invite">
+        <h1 class="invite__head">Point it at a repo.</h1>
+        <p class="invite__sub">
+          Any GitHub repository with images in it. Nothing downloads until you
+          scroll to it.
+        </p>
+        <button class="chip" id="suggest" type="button">
+          D3Ext/aesthetic&#8209;wallpapers
+        </button>
+      </section>
+
+      <section class="working" id="working" hidden>
+        <span class="working__pulse" aria-hidden="true"></span>
+        <p class="working__text" id="working-text">Reading the tree…</p>
+      </section>
+
+      <section class="fault" id="fault" hidden>
+        <h2 class="fault__head" id="fault-head">That didn't load.</h2>
+        <p class="fault__body" id="fault-body"></p>
+      </section>
+
+      <div class="strip" id="strip" role="listbox" aria-label="Wallpapers"></div>
+    </main>
+
+    <footer class="detail" id="detail" hidden>
+      <div class="detail__lede">
+        <h2 class="detail__title" id="title"></h2>
+        <p class="detail__specs" id="specs"></p>
+      </div>
+
+      <div class="detail__act">
+        <button class="apply" id="apply" type="button">Set wallpaper</button>
+        <p class="keys">
+          <kbd>←</kbd><kbd>→</kbd> browse
+          <span class="keys__sep"></span>
+          <kbd>⏎</kbd> set
+          <span class="keys__sep"></span>
+          <kbd>esc</kbd> close
+        </p>
+      </div>
+    </footer>
+
+    <div class="rail" id="rail" hidden>
+      <div class="rail__track"><div class="rail__fill" id="rail-fill"></div></div>
+      <p class="rail__count" id="rail-count"></p>
+    </div>
+
+    <output class="toast" id="toast" aria-live="polite"></output>
+
+    <script src="main.js"></script>
+  </body>
+</html>

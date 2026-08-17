@@ -1,0 +1,28 @@
+[workspace]
+members = ["crates/gitwall-core", "crates/gitwall-ui"]
+resolver = "2"
+
+[workspace.package]
+version = "0.1.0"
+edition = "2021"
+license = "MIT"
+repository = "https://github.com/taubut/gitwall"
+
+[workspace.dependencies]
+anyhow = "1"
+thiserror = "2"
+serde = { version = "1", features = ["derive"] }
+serde_json = "1"
+tokio = { version = "1", features = ["rt-multi-thread", "macros", "fs", "sync", "time", "process"] }
+reqwest = { version = "0.12", default-features = false, features = ["json", "rustls-tls", "stream"] }
+image = { version = "0.25", default-features = false, features = ["jpeg", "png", "webp", "gif", "bmp"] }
+futures = "0.3"
+dirs = "6"
+tracing = "0.1"
+
+[profile.release]
+codegen-units = 1
+lto = true
+opt-level = "s"
+panic = "abort"
+strip = true
