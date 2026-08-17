@@ -111,7 +111,11 @@ Detected from the environment, most specific first. Override with
 | <kbd>/</kbd> | jump to the source field |
 | <kbd>Esc</kbd> | close |
 
-Mouse: scroll to browse, click to focus, click the focused one to apply. The
+Mouse: grab the wallpapers and flick them — the release speed carries into a
+coast that settles on a slice. In the grid the same drag scrolls vertically.
+Scroll wheel still works, click focuses, and clicking the focused one applies.
+A press that moves less than a few points stays a click, so tapping still
+selects. The
 toolbar carries the same controls plus a section filter and a colour-swatch
 filter.
 

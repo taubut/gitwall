@@ -41,11 +41,30 @@ const SCROLL_STEP: f32 = 40.0;
 /// How close to the end of the list triggers loading the next page.
 const MORE_TRIGGER: i64 = 24;
 
+/// Pointer travel, in points, before a press counts as a drag rather than a
+/// click. Below this it stays a click so tapping a slice still selects it.
+const DRAG_SLOP: f32 = 6.0;
+/// Inertia decay after a flick. Larger coasts further.
+const FLING_TAU: f32 = 0.32;
+/// Below this the flick is over and the strip settles on a slice.
+const FLING_MIN_SLICES: f32 = 0.45;
+const FLING_MIN_PX: f32 = 12.0;
+
 const GRID_TILE_TARGET: f32 = 300.0;
 const GRID_GAP: f32 = 10.0;
 
 fn repo_field() -> egui::Id {
     egui::Id::new("gitwall-repo-field")
+}
+
+/// Where a drag began, so movement can be measured against it rather than
+/// accumulated frame by frame (which drifts).
+#[derive(Clone)]
+struct DragAnchor {
+    pos: f32,
+    scroll: f32,
+    /// Furthest the pointer has travelled since the press.
+    moved: f32,
 }
 
 enum Screen {
@@ -124,6 +143,11 @@ pub struct App {
     paging: Option<crate::bridge::Paging>,
     search_total: u64,
     loading_more: bool,
+    drag: Option<DragAnchor>,
+    /// Coasting speed after a flick: slices/sec in the strip, points/sec in the
+    /// grid.
+    fling: f32,
+    scroll_fling: f32,
 }
 
 impl App {
@@ -180,6 +204,9 @@ impl App {
             paging: None,
             search_total: 0,
             loading_more: false,
+            drag: None,
+            fling: 0.0,
+            scroll_fling: 0.0,
         };
 
         if let Some(url) = initial {
@@ -217,6 +244,9 @@ impl App {
         self.accent = theme::ACCENT_FALLBACK;
         self.paging = None;
         self.loading_more = false;
+        self.drag = None;
+        self.fling = 0.0;
+        self.scroll_fling = 0.0;
     }
 
     /* -------------------------------------------------------- source list */
@@ -573,21 +603,7 @@ impl App {
             });
 
         if !ctx.egui_wants_pointer_input() {
-            let click = ctx.input(|i| {
-                i.pointer
-                    .primary_clicked()
-                    .then(|| i.pointer.interact_pos())
-                    .flatten()
-            });
-            if let Some(p) = click {
-                if let Some(slot) = self.hit(p) {
-                    if slot == self.cursor {
-                        self.apply();
-                    } else {
-                        self.set_cursor(slot);
-                    }
-                }
-            }
+            self.handle_pointer(ctx);
         }
 
         self.scroll_accum -= scroll;
@@ -626,6 +642,83 @@ impl App {
                 self.say("No favourites yet — press F on a wallpaper", true, ctx);
             } else {
                 self.set_source(next);
+            }
+        }
+    }
+
+    /// Press-drag-release on the wallpapers: grab and flick them, with the
+    /// release velocity carried into a coast. A press that barely moves stays a
+    /// click, so tapping a slice still selects it and tapping the focused one
+    /// still applies it.
+    fn handle_pointer(&mut self, ctx: &Context) {
+        let (pressed, down, released, origin, at, vel) = ctx.input(|i| {
+            (
+                i.pointer.primary_pressed(),
+                i.pointer.primary_down(),
+                i.pointer.primary_released(),
+                i.pointer.press_origin(),
+                i.pointer.interact_pos(),
+                i.pointer.velocity(),
+            )
+        });
+
+        // Points of pointer travel per slice.
+        let pitch = Metrics::new(self.screen_rect.size()).step().max(1.0);
+        let last = (self.order.len() as f32 - 1.0).max(0.0);
+
+        if pressed {
+            self.drag = Some(DragAnchor {
+                pos: self.pos,
+                scroll: self.grid_scroll_target,
+                moved: 0.0,
+            });
+            self.fling = 0.0;
+            self.scroll_fling = 0.0;
+        }
+
+        if down {
+            if let (Some(o), Some(p), Some(anchor)) = (origin, at, self.drag.clone()) {
+                let travel = (p - o).length();
+                if let Some(d) = &mut self.drag {
+                    d.moved = d.moved.max(travel);
+                }
+                if travel > DRAG_SLOP {
+                    match self.view_mode {
+                        ViewMode::Slices => {
+                            // Measured from the anchor, not accumulated, so the
+                            // strip tracks the pointer exactly.
+                            self.pos = (anchor.pos - (p.x - o.x) / pitch).clamp(0.0, last);
+                            self.cursor = self.pos.round() as i64;
+                        }
+                        ViewMode::Grid => {
+                            self.grid_scroll_target = (anchor.scroll - (p.y - o.y)).max(0.0);
+                            self.grid_scroll = self.grid_scroll_target;
+                        }
+                    }
+                }
+            }
+        }
+
+        if released {
+            match self.drag.take() {
+                // A flick: carry the release velocity into a coast.
+                Some(d) if d.moved > DRAG_SLOP => match self.view_mode {
+                    ViewMode::Slices => self.fling = -vel.x / pitch,
+                    ViewMode::Grid => self.scroll_fling = -vel.y,
+                },
+                // Otherwise it was a click.
+                Some(_) => {
+                    if let Some(p) = at {
+                        if let Some(slot) = self.hit(p) {
+                            if slot == self.cursor {
+                                self.apply();
+                            } else {
+                                self.set_cursor(slot);
+                            }
+                        }
+                    }
+                }
+                None => {}
             }
         }
     }
@@ -714,6 +807,33 @@ impl App {
     fn animate(&mut self, ctx: &Context) -> bool {
         let dt = ctx.input(|i| i.stable_dt).clamp(0.0, 0.1);
         let k = 1.0 - (-dt / GLIDE_TAU).exp();
+        let last = (self.order.len() as f32 - 1.0).max(0.0);
+
+        // A drag owns the position outright; nothing should ease against it.
+        if self.drag.as_ref().is_some_and(|d| d.moved > DRAG_SLOP) {
+            return true;
+        }
+
+        if self.fling != 0.0 {
+            self.pos = (self.pos + self.fling * dt).clamp(0.0, last);
+            self.fling *= (-dt / FLING_TAU).exp();
+            // Stop at the ends too, or it coasts against a wall.
+            if self.fling.abs() < FLING_MIN_SLICES || self.pos <= 0.0 || self.pos >= last {
+                self.fling = 0.0;
+                self.cursor = self.pos.round() as i64;
+            }
+            return true;
+        }
+
+        if self.scroll_fling != 0.0 {
+            self.grid_scroll_target = (self.grid_scroll_target + self.scroll_fling * dt).max(0.0);
+            self.grid_scroll = self.grid_scroll_target;
+            self.scroll_fling *= (-dt / FLING_TAU).exp();
+            if self.scroll_fling.abs() < FLING_MIN_PX || self.grid_scroll_target <= 0.0 {
+                self.scroll_fling = 0.0;
+            }
+            return true;
+        }
 
         let target = self.cursor as f32;
         self.pos += (target - self.pos) * k;
@@ -1753,7 +1873,7 @@ impl eframe::App for App {
                     painter.text(
                         Pos2::new(rect.right() - pad, base + 16.0),
                         Align2::RIGHT_BOTTOM,
-                        "← → browse   ⏎ set   F star   G grid   ⇥ favourites   esc close",
+                        "drag to flick   ⏎ set   F star   G grid   ⇥ favourites   esc close",
                         FontId::new(10.5, mono.clone()),
                         theme::FAINT,
                     );
