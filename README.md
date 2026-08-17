@@ -17,10 +17,6 @@ full-size before committing to it.
 
 <kbd>G</kbd> switches to a grid.
 
-![Sorted by hue](assets/screenshots/hue.png)
-
-<kbd>S</kbd> sorts the collection by hue.
-
 
 Paste a repository URL, scroll the sheared slice carousel, press Enter. The
 interaction follows [skwd-wall](https://github.com/liixini/skwd-wall)'s slices
