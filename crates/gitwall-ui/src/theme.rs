@@ -18,6 +18,8 @@ pub const FAINT: Color32 = Color32::from_rgb(0x7b, 0x83, 0x98);
 
 pub const ACCENT_FALLBACK: Color32 = Color32::from_rgb(0x7f, 0xd4, 0xe8);
 pub const BAD: Color32 = Color32::from_rgb(0xff, 0xc9, 0xc9);
+/// Destructive affordances (removing a history entry).
+pub const DANGER: Color32 = Color32::from_rgb(0xff, 0x5f, 0x5f);
 
 /// Slice ratios, all derived from slice height. Taken from skwd-wall's "M"
 /// preset; see the notes in `Metrics`.

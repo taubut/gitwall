@@ -1304,7 +1304,7 @@ impl eframe::App for App {
             egui::TextEdit::singleline(&mut self.url)
                 .id(repo_field())
                 .font(FontId::new(13.0, mono.clone()))
-                .hint_text("github.com/owner/repo")
+                .hint_text("repo URL, imgur album, or search")
                 .desired_width(f32::INFINITY),
         );
         if edit.lost_focus() && ctx.input(|i| i.key_pressed(Key::Enter)) {
@@ -1520,7 +1520,7 @@ impl eframe::App for App {
                     painter.text(
                         rect.center() + Vec2::new(0.0, 48.0),
                         Align2::CENTER_CENTER,
-                        "Any GitHub repository with images in it.",
+                        "A GitHub repo, an Imgur album, or just type what you want.",
                         FontId::new(14.0, mono.clone()),
                         theme::DIM,
                     );
@@ -1534,14 +1534,24 @@ impl eframe::App for App {
                         theme::TEXT,
                     );
                     let mut open: Option<String> = None;
+                    let mut forget: Option<usize> = None;
                     for (i, v) in history.iter().enumerate() {
                         let r = Rect::from_center_size(
                             Pos2::new(rect.center().x, top + i as f32 * 34.0),
-                            Vec2::new(520.0, 30.0),
+                            Vec2::new(560.0, 30.0),
                         );
-                        let resp =
+                        // The delete target is claimed first so a click on it
+                        // never also opens the entry underneath.
+                        let del = Rect::from_center_size(
+                            Pos2::new(r.right() - 18.0, r.center().y),
+                            Vec2::splat(22.0),
+                        );
+                        let del_resp =
+                            ui.interact(del, egui::Id::new(("hist-del", i)), Sense::click());
+                        let row_resp =
                             ui.interact(r, egui::Id::new(("hist", i)), Sense::click());
-                        let on = i == self.home_pick || resp.hovered();
+
+                        let on = i == self.home_pick || row_resp.hovered();
                         if on {
                             painter.rect_filled(r, 2.0, Color32::from_white_alpha(16));
                         }
@@ -1553,17 +1563,40 @@ impl eframe::App for App {
                             if on { theme::TEXT } else { theme::DIM },
                         );
                         painter.text(
-                            Pos2::new(r.right() - 14.0, r.center().y),
+                            Pos2::new(del.left() - 12.0, r.center().y),
                             Align2::RIGHT_CENTER,
                             format!("{}", v.images),
                             FontId::new(11.0, mono.clone()),
                             theme::FAINT,
                         );
-                        if resp.clicked() {
+                        painter.text(
+                            del.center(),
+                            Align2::CENTER_CENTER,
+                            "✕",
+                            FontId::new(13.0, mono.clone()),
+                            if del_resp.hovered() {
+                                theme::DANGER
+                            } else if on {
+                                theme::FAINT
+                            } else {
+                                Color32::from_white_alpha(40)
+                            },
+                        );
+
+                        if del_resp.clicked() {
+                            forget = Some(i);
+                        } else if row_resp.clicked() {
                             open = Some(v.input.clone());
                         }
                     }
-                    if let Some(url) = open {
+
+                    if let Some(i) = forget {
+                        self.library.forget(i);
+                        let _ = self.library.save();
+                        self.home_pick = self
+                            .home_pick
+                            .min(self.library.history().len().saturating_sub(1));
+                    } else if let Some(url) = open {
                         self.url = url.clone();
                         self.load(url);
                     }

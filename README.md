@@ -112,6 +112,10 @@ Mouse: scroll to browse, click to focus, click the focused one to apply. The
 toolbar carries the same controls plus a section filter and a colour-swatch
 filter.
 
+The field at the top takes all three kinds of input — a repo URL, an Imgur
+album, or a search phrase. The start screen lists what you have opened before;
+click one to reopen it, or the <kbd>✕</kbd> on its right to forget it.
+
 Favourites and history live in `~/.local/share/gitwall/`. A favourite stores its
 own URLs rather than repo coordinates, so one starred list spans GitHub repos
 and Imgur albums together, and keeps working without re-resolving anything.
