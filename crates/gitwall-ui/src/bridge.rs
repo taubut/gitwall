@@ -319,7 +319,51 @@ async fn resolve(url: String, core: Arc<Core>) -> Evt {
     if let Some(reference) = gitwall_core::imgur::parse_ref(&url) {
         return resolve_imgur(url, reference, core).await;
     }
+    // Last: anything that isn't a URL or an owner/repo is a search phrase.
+    if gitwall_core::wallhaven::looks_like_query(&url) {
+        return resolve_search(url, core).await;
+    }
     resolve_github(url, core).await
+}
+
+async fn resolve_search(query: String, core: Arc<Core>) -> Evt {
+    let found = match gitwall_core::wallhaven::WallhavenClient::new(core.http.clone())
+        .search(query.trim())
+        .await
+    {
+        Ok(s) => s,
+        Err(e) => return Evt::ResolveFailed(e.to_string()),
+    };
+
+    let rows = found
+        .hits
+        .iter()
+        .map(|h| Row {
+            key: h.id.clone(),
+            name: h.id.clone(),
+            label: h.id.clone(),
+            group: String::new(),
+            ext: h.ext.to_ascii_uppercase(),
+            size: h.size,
+            width: h.width,
+            height: h.height,
+            origin: "wallhaven".into(),
+            // Native thumbnail, with the original as the fallback.
+            preview: [h.thumb.clone(), h.full.clone()],
+            full: [h.full.clone(), h.full.clone()],
+        })
+        .collect::<Vec<_>>();
+
+    Evt::Resolved {
+        title: found.query.clone(),
+        badge: format!("wallhaven · {} of {} results", rows.len(), found.total),
+        input: found.query,
+        total_bytes: found.hits.iter().map(|h| h.size).sum(),
+        // Not truncation — a search is paged, and the badge already says how
+        // many of how many were fetched.
+        truncated: false,
+        rows,
+    }
 }
 
 async fn resolve_imgur(

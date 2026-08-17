@@ -10,6 +10,7 @@ pub mod imgur;
 pub mod library;
 pub mod source;
 pub mod thumb;
+pub mod wallhaven;
 pub mod wallpaper;
 
 pub use cache::Cache;

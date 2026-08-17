@@ -28,6 +28,7 @@ skwd-wall cannot (it needs `wlr-layer-shell`).
 gitwall                                                      # history / start empty
 gitwall github.com/D3Ext/aesthetic-wallpapers                # a repo
 gitwall imgur.com/gallery/4k-wallpaper-dump-1Ur1STy          # an imgur album
+gitwall "world of warcraft"                                  # search
 ```
 
 ## Sources
@@ -37,6 +38,13 @@ gitwall imgur.com/gallery/4k-wallpaper-dump-1Ur1STy          # an imgur album
 | `github.com/owner/repo` | also `/tree/<ref>/<subdir>`, `/blob/...`, `owner/repo`, ssh form |
 | `imgur.com/gallery/<slug-hash>` | also `imgur.com/a/<hash>` |
 | `imgur.com/t/<tag>` | **not supported** — a tag is a feed of many posts, not one album. Open a post from it. |
+| anything else | treated as a **search**, via [Wallhaven](https://wallhaven.cc). Type `world of warcraft`. |
+
+Search is the fallback: anything that doesn't parse as a URL or as
+`owner/repo` becomes a query. Wallhaven's API needs no key and returns SFW
+results only without one; set `WALLHAVEN_API_KEY` if you want your own account's
+settings. It returns 120 results (five pages) per search — the top-right badge
+says how many of how many were fetched. Rate limit is 45 requests/minute.
 
 Imgur is the better-behaved source of the two: it reports dimensions and byte
 sizes up front, and it serves native ~640 px thumbnails. A 545 MB / 482-image
