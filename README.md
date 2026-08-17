@@ -43,8 +43,11 @@ gitwall "world of warcraft"                                  # search
 Search is the fallback: anything that doesn't parse as a URL or as
 `owner/repo` becomes a query. Wallhaven's API needs no key and returns SFW
 results only without one; set `WALLHAVEN_API_KEY` if you want your own account's
-settings. It returns 120 results (five pages) per search — the top-right badge
-says how many of how many were fetched. Rate limit is 45 requests/minute.
+settings. Categories are set explicitly to General + Anime + People.
+
+A search loads 120 results up front and pulls more as you scroll toward the
+end, two pages at a time. The top-right badge tracks it: `wallhaven · 216 of
+6086 results`. Rate limit is 45 requests/minute.
 
 Imgur is the better-behaved source of the two: it reports dimensions and byte
 sizes up front, and it serves native ~640 px thumbnails. A 545 MB / 482-image

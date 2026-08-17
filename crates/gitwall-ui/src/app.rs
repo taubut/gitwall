@@ -38,6 +38,9 @@ const BACKDROP_FADE: f32 = 0.32;
 const SETTLE: f64 = 0.28;
 const SCROLL_STEP: f32 = 40.0;
 
+/// How close to the end of the list triggers loading the next page.
+const MORE_TRIGGER: i64 = 24;
+
 const GRID_TILE_TARGET: f32 = 300.0;
 const GRID_GAP: f32 = 10.0;
 
@@ -117,6 +120,10 @@ pub struct App {
     applying: bool,
     settle_deadline: Option<f64>,
     screen_rect: Rect,
+    /// Where a paged source is up to; `None` once everything is loaded.
+    paging: Option<crate::bridge::Paging>,
+    search_total: u64,
+    loading_more: bool,
 }
 
 impl App {
@@ -170,6 +177,9 @@ impl App {
             applying: false,
             settle_deadline: None,
             screen_rect: Rect::ZERO,
+            paging: None,
+            search_total: 0,
+            loading_more: false,
         };
 
         if let Some(url) = initial {
@@ -205,6 +215,8 @@ impl App {
         self.grid_scroll = 0.0;
         self.grid_scroll_target = 0.0;
         self.accent = theme::ACCENT_FALLBACK;
+        self.paging = None;
+        self.loading_more = false;
     }
 
     /* -------------------------------------------------------- source list */
@@ -343,6 +355,7 @@ impl App {
                     total_bytes,
                     truncated,
                     rows,
+                    paging,
                 } => {
                     self.label = title.clone();
                     self.commit_short = badge;
@@ -351,6 +364,8 @@ impl App {
                     self.rows = rows;
                     self.source = Source::Repo;
                     self.screen = Screen::Loaded;
+                    self.search_total = paging.as_ref().map(|p| p.total).unwrap_or(0);
+                    self.paging = paging;
                     self.recompute_sections();
                     self.rebuild_order();
 
@@ -367,6 +382,25 @@ impl App {
                     }
                 }
                 Evt::ResolveFailed(msg) => self.screen = Screen::Fault(msg),
+
+                Evt::More { rows, paging } => {
+                    self.loading_more = false;
+                    self.paging = paging;
+                    if !rows.is_empty() {
+                        // Appending never disturbs existing indices, so loaded
+                        // textures and the cursor stay put.
+                        self.rows.extend(rows.iter().cloned());
+                        if self.source == Source::Repo {
+                            self.repo_rows.extend(rows);
+                        }
+                        self.commit_short = format!(
+                            "wallhaven · {} of {} results",
+                            self.rows.len(),
+                            self.search_total
+                        );
+                        self.rebuild_order();
+                    }
+                }
 
                 Evt::Thumb {
                     row,
@@ -759,6 +793,19 @@ impl App {
         }
 
         self.evict();
+
+        // Pull the next page as the end of the list comes into view.
+        if !self.loading_more && self.source == Source::Repo {
+            if let Some(p) = self.paging.clone() {
+                if self.cursor + MORE_TRIGGER >= self.order.len() as i64 {
+                    self.loading_more = true;
+                    self.bridge.send(Cmd::SearchMore {
+                        query: p.query,
+                        page: p.next_page,
+                    });
+                }
+            }
+        }
 
         if let Some(row) = self.focused_row() {
             if let Some(meta) = self.metas.get(&row) {
@@ -1540,16 +1587,17 @@ impl eframe::App for App {
                             Pos2::new(rect.center().x, top + i as f32 * 34.0),
                             Vec2::new(560.0, 30.0),
                         );
-                        // The delete target is claimed first so a click on it
-                        // never also opens the entry underneath.
                         let del = Rect::from_center_size(
                             Pos2::new(r.right() - 18.0, r.center().y),
                             Vec2::splat(22.0),
                         );
-                        let del_resp =
-                            ui.interact(del, egui::Id::new(("hist-del", i)), Sense::click());
+                        // Order matters: egui puts whatever is registered last
+                        // on top, so the row has to go first for the delete
+                        // target to receive the click at all.
                         let row_resp =
                             ui.interact(r, egui::Id::new(("hist", i)), Sense::click());
+                        let del_resp =
+                            ui.interact(del, egui::Id::new(("hist-del", i)), Sense::click());
 
                         let on = i == self.home_pick || row_resp.hovered();
                         if on {
@@ -1585,7 +1633,7 @@ impl eframe::App for App {
 
                         if del_resp.clicked() {
                             forget = Some(i);
-                        } else if row_resp.clicked() {
+                        } else if row_resp.clicked() && !del_resp.hovered() {
                             open = Some(v.input.clone());
                         }
                     }

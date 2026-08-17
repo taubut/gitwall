@@ -35,8 +35,19 @@ pub struct Target {
     pub urls: [String; 2],
 }
 
+/// Where a paged source is up to. `None` anywhere means "nothing more to load".
+#[derive(Clone, Debug)]
+pub struct Paging {
+    pub query: String,
+    pub next_page: u32,
+    /// Results that exist in total, not the number fetched.
+    pub total: u64,
+}
+
 pub enum Cmd {
     Resolve(String),
+    /// Next slice of a search, as the user scrolls toward the end.
+    SearchMore { query: String, page: u32 },
     Thumb { row: usize, target: Target },
     Full { row: usize, target: Target },
     Apply { target: Target, name: String },
@@ -128,8 +139,15 @@ pub enum Evt {
         total_bytes: u64,
         truncated: bool,
         rows: Vec<Row>,
+        /// Set only for searches with more pages available.
+        paging: Option<Paging>,
     },
     ResolveFailed(String),
+    /// More search results appended to the end of the current collection.
+    More {
+        rows: Vec<Row>,
+        paging: Option<Paging>,
+    },
     Thumb {
         row: usize,
         slice: Arc<ColorImage>,
@@ -238,6 +256,21 @@ async fn handle(cmd: Cmd, core: Arc<Core>) -> Option<Evt> {
     match cmd {
         Cmd::Resolve(url) => Some(resolve(url, core).await),
 
+        Cmd::SearchMore { query, page } => {
+            let found = gitwall_core::wallhaven::WallhavenClient::new(core.http.clone())
+                .search_from(&query, page, 2)
+                .await
+                .ok()?;
+            Some(Evt::More {
+                rows: rows_from_hits(&found.hits),
+                paging: found.next_page.map(|next_page| Paging {
+                    query,
+                    next_page,
+                    total: found.total,
+                }),
+            })
+        }
+
         Cmd::Thumb { row, target } => {
             match core
                 .fetcher
@@ -326,18 +359,8 @@ async fn resolve(url: String, core: Arc<Core>) -> Evt {
     resolve_github(url, core).await
 }
 
-async fn resolve_search(query: String, core: Arc<Core>) -> Evt {
-    let found = match gitwall_core::wallhaven::WallhavenClient::new(core.http.clone())
-        .search(query.trim())
-        .await
-    {
-        Ok(s) => s,
-        Err(e) => return Evt::ResolveFailed(e.to_string()),
-    };
-
-    let rows = found
-        .hits
-        .iter()
+fn rows_from_hits(hits: &[gitwall_core::wallhaven::Hit]) -> Vec<Row> {
+    hits.iter()
         .map(|h| Row {
             key: h.id.clone(),
             name: h.id.clone(),
@@ -352,17 +375,34 @@ async fn resolve_search(query: String, core: Arc<Core>) -> Evt {
             preview: [h.thumb.clone(), h.full.clone()],
             full: [h.full.clone(), h.full.clone()],
         })
-        .collect::<Vec<_>>();
+        .collect()
+}
+
+async fn resolve_search(query: String, core: Arc<Core>) -> Evt {
+    let found = match gitwall_core::wallhaven::WallhavenClient::new(core.http.clone())
+        .search(query.trim())
+        .await
+    {
+        Ok(s) => s,
+        Err(e) => return Evt::ResolveFailed(e.to_string()),
+    };
+
+    let rows = rows_from_hits(&found.hits);
 
     Evt::Resolved {
         title: found.query.clone(),
         badge: format!("wallhaven · {} of {} results", rows.len(), found.total),
-        input: found.query,
+        input: found.query.clone(),
         total_bytes: found.hits.iter().map(|h| h.size).sum(),
         // Not truncation — a search is paged, and the badge already says how
         // many of how many were fetched.
         truncated: false,
         rows,
+        paging: found.next_page.map(|next_page| Paging {
+            query: found.query,
+            next_page,
+            total: found.total,
+        }),
     }
 }
 
@@ -407,6 +447,7 @@ async fn resolve_imgur(
         total_bytes: album.total_bytes(),
         truncated: false,
         rows,
+        paging: None,
     }
 }
 
@@ -471,5 +512,6 @@ async fn resolve_github(url: String, core: Arc<Core>) -> Evt {
         total_bytes: listing.images.iter().map(|i| i.size).sum(),
         truncated: listing.truncated,
         rows,
+        paging: None,
     }
 }

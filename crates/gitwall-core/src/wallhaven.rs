@@ -18,6 +18,11 @@ const API: &str = "https://wallhaven.cc/api/v1/search";
 /// enough to browse without turning one keystroke into fifty requests.
 const PAGES: u32 = 5;
 
+/// Bit flags for general / anime / people.
+const CATEGORIES: &str = "111";
+/// Bit flags for sfw / sketchy / nsfw.
+const PURITY: &str = "100";
+
 #[derive(Debug, Clone)]
 pub struct Hit {
     pub id: String,
@@ -35,6 +40,8 @@ pub struct Search {
     pub query: String,
     /// How many results exist in total, not how many were fetched.
     pub total: u64,
+    /// Page to ask for next, or `None` when the results are exhausted.
+    pub next_page: Option<u32>,
     pub hits: Vec<Hit>,
 }
 
@@ -147,6 +154,12 @@ impl WallhavenClient {
             ("q", query),
             ("sorting", "favorites"),
             ("order", "desc"),
+            // General / Anime / People — all three, stated explicitly rather
+            // than inherited from whatever the API defaults to.
+            ("categories", CATEGORIES),
+            // SFW only. Without an API key the API enforces this anyway; being
+            // explicit means it stays true if a key is ever supplied.
+            ("purity", PURITY),
             ("page", &page.to_string()),
         ]);
         if let Some(k) = &self.api_key {
@@ -168,18 +181,31 @@ impl WallhavenClient {
         resp.json::<Response>().await.map_err(Error::Http)
     }
 
+    /// First slice of results. Errors if the query matched nothing.
     pub async fn search(&self, query: &str) -> Result<Search> {
-        let first = self.page(query, 1).await?;
-        let total = first.meta.total;
-        let last = first.meta.last_page.max(1);
-
-        let mut hits: Vec<Hit> = first.data.into_iter().map(Hit::from).collect();
-        if hits.is_empty() {
+        let found = self.search_from(query, 1, PAGES).await?;
+        if found.hits.is_empty() {
             return Err(Error::NoImages(format!("wallhaven search for {query:?}")));
         }
+        Ok(found)
+    }
 
-        // Pull a few more pages so there is something to scroll through.
-        let extra = (2..=PAGES.min(last)).map(|p| self.page(query, p));
+    /// `pages` pages starting at `first`. Used both for the initial search and
+    /// for pulling more as the user scrolls, so paging behaves identically in
+    /// both cases.
+    ///
+    /// Running out of results is not an error here — it comes back as
+    /// `next_page: None`.
+    pub async fn search_from(&self, query: &str, first: u32, pages: u32) -> Result<Search> {
+        let first = first.max(1);
+        let head = self.page(query, first).await?;
+        let total = head.meta.total;
+        let last = head.meta.last_page.max(1);
+
+        let mut hits: Vec<Hit> = head.data.into_iter().map(Hit::from).collect();
+
+        let highest = (first + pages.saturating_sub(1)).min(last);
+        let extra = (first + 1..=highest).map(|p| self.page(query, p));
         for page in futures::future::join_all(extra).await.into_iter().flatten() {
             hits.extend(page.data.into_iter().map(Hit::from));
         }
@@ -187,6 +213,7 @@ impl WallhavenClient {
         Ok(Search {
             query: query.to_string(),
             total,
+            next_page: (highest < last).then_some(highest + 1),
             hits,
         })
     }
@@ -251,6 +278,20 @@ mod tests {
         assert_eq!(hit.ext, "jpg");
         assert!(hit.thumb.contains("th.wallhaven.cc"), "uses the native thumbnail");
         assert!(hit.full.contains("w.wallhaven.cc/full"));
+    }
+
+    #[test]
+    fn next_page_arithmetic() {
+        // (first, pages, last) -> next
+        let next = |first: u32, pages: u32, last: u32| {
+            let highest = (first + pages.saturating_sub(1)).min(last);
+            (highest < last).then_some(highest + 1)
+        };
+        assert_eq!(next(1, 5, 52), Some(6), "five pages from 1 leaves 6 next");
+        assert_eq!(next(6, 2, 52), Some(8));
+        assert_eq!(next(51, 5, 52), None, "clamped to the last page, nothing left");
+        assert_eq!(next(1, 5, 3), None, "fewer pages exist than requested");
+        assert_eq!(next(1, 1, 1), None, "single page of results");
     }
 
     #[test]
