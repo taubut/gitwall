@@ -77,8 +77,11 @@ Exec=$BIN_DIR/gitwall
 Icon=gitwall
 Terminal=false
 Categories=Utility;
-Keywords=wallpaper;background;desktop;github;rice;
-StartupNotify=true
+Keywords=wallpaper;background;desktop;github;imgur;wallhaven;rice;
+# false on purpose: the desktop shows a busy cursor until the app reports
+# startup complete, and winit does not send that. Leaving it true means a
+# spinner that outlives the app by however long the compositor's timeout is.
+StartupNotify=false
 EOF
 chmod 644 "$DESKTOP"
 echo "launcher -> $DESKTOP"

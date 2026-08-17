@@ -257,18 +257,25 @@ async fn handle(cmd: Cmd, core: Arc<Core>) -> Option<Evt> {
         Cmd::Resolve(url) => Some(resolve(url, core).await),
 
         Cmd::SearchMore { query, page } => {
-            let found = gitwall_core::wallhaven::WallhavenClient::new(core.http.clone())
+            match gitwall_core::wallhaven::WallhavenClient::new(core.http.clone())
                 .search_from(&query, page, 2)
                 .await
-                .ok()?;
-            Some(Evt::More {
-                rows: rows_from_hits(&found.hits),
-                paging: found.next_page.map(|next_page| Paging {
-                    query,
-                    next_page,
-                    total: found.total,
+            {
+                Ok(found) => Some(Evt::More {
+                    rows: rows_from_hits(&found.hits),
+                    paging: found.next_page.map(|next_page| Paging {
+                        query,
+                        next_page,
+                        total: found.total,
+                    }),
                 }),
-            })
+                // Always answer. Staying silent would leave the UI believing a
+                // fetch is still in flight, and paging would never resume.
+                Err(_) => Some(Evt::More {
+                    rows: Vec::new(),
+                    paging: None,
+                }),
+            }
         }
 
         Cmd::Thumb { row, target } => {

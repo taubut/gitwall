@@ -385,7 +385,9 @@ impl App {
 
                 Evt::More { rows, paging } => {
                     self.loading_more = false;
-                    self.paging = paging;
+                    // An empty page means stop, whatever the server claims is
+                    // left — otherwise the end-of-list trigger re-fires forever.
+                    self.paging = if rows.is_empty() { None } else { paging };
                     if !rows.is_empty() {
                         // Appending never disturbs existing indices, so loaded
                         // textures and the cursor stay put.

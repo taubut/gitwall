@@ -139,7 +139,9 @@ album is cheap.
 
 That puts the binary in `~/.local/bin`, icons in the hicolor theme, and a
 desktop entry in `~/.local/share/applications` — so `gitwall` works in a shell
-and the app shows up in the menu. Re-run it after every rebuild; it copies the
+and the app shows up in the menu. The entry sets `StartupNotify=false`: winit
+doesn't report startup completion, and without that the desktop leaves a busy
+cursor spinning until its own timeout expires — outliving the app itself. Re-run it after every rebuild; it copies the
 binary rather than symlinking, so `cargo build` alone won't update what's
 installed.
 
