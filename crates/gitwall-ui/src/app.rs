@@ -26,9 +26,12 @@ const FADE_ZONE: f32 = 7.0;
 const RENDER_WINDOW: i64 = 14;
 const LOOKBEHIND: i64 = 8;
 const LOOKAHEAD: i64 = 14;
-/// Textures outside this window are dropped; browsing 372 wallpapers would
-/// otherwise pin gigabytes of VRAM.
+/// How far either side of the cursor counts as "recently seen".
 const TEXTURE_WINDOW: i64 = 36;
+/// Texture budget. Browsing hundreds of wallpapers would otherwise pin
+/// gigabytes of VRAM.
+const SLICE_CAP: usize = 240;
+const BACKDROP_CAP: usize = 48;
 
 const GLIDE_TAU: f32 = 0.075;
 const BACKDROP_FADE: f32 = 0.32;
@@ -98,6 +101,9 @@ pub struct App {
     metas: HashMap<i64, ThumbMeta>,
     requested: HashSet<i64>,
     full_requested: HashSet<i64>,
+    /// Row -> tick it was last near the cursor, for texture eviction.
+    seen: HashMap<i64, u64>,
+    tick: u64,
     failed: HashSet<i64>,
 
     shown_backdrop: Option<i64>,
@@ -151,6 +157,8 @@ impl App {
             metas: HashMap::new(),
             requested: HashSet::new(),
             full_requested: HashSet::new(),
+            seen: HashMap::new(),
+            tick: 0,
             failed: HashSet::new(),
             shown_backdrop: None,
             prev_backdrop: None,
@@ -188,6 +196,7 @@ impl App {
         self.metas.clear();
         self.requested.clear();
         self.full_requested.clear();
+        self.seen.clear();
         self.failed.clear();
         self.shown_backdrop = None;
         self.prev_backdrop = None;
@@ -733,18 +742,23 @@ impl App {
             }
         }
 
-        // Evict by display distance, not row index — after a colour sort those
-        // are unrelated.
-        let live: HashSet<i64> = ((near - TEXTURE_WINDOW).max(0)
-            ..=(near + TEXTURE_WINDOW).min(self.order.len() as i64 - 1))
-            .filter_map(|s| self.order.get(s as usize).copied())
-            .collect();
+        // Mark everything currently near the cursor as recently seen, then
+        // evict the least-recently-seen if we are over budget.
+        //
+        // Evicting by *display distance* instead would throw away every loaded
+        // texture the moment the order changes — sorting by hue reshuffles
+        // which rows sit near the cursor, so a perfectly good set of images
+        // would be dropped and immediately re-downloaded, blanking the view.
+        self.tick += 1;
+        for slot in (near - TEXTURE_WINDOW).max(0)
+            ..=(near + TEXTURE_WINDOW).min(self.order.len() as i64 - 1)
+        {
+            if let Some(&row) = self.order.get(slot as usize) {
+                self.seen.insert(row, self.tick);
+            }
+        }
 
-        self.slices.retain(|k, _| live.contains(k));
-        self.backdrops.retain(|k, _| {
-            live.contains(k) || Some(*k) == self.shown_backdrop || Some(*k) == self.prev_backdrop
-        });
-        self.requested.retain(|k| live.contains(k));
+        self.evict();
 
         if let Some(row) = self.focused_row() {
             if let Some(meta) = self.metas.get(&row) {
@@ -776,6 +790,53 @@ impl App {
     }
 
     /* ------------------------------------------------------------ layout -- */
+
+    /// Drop the least-recently-seen textures once over budget.
+    ///
+    /// Keyed on rows, never on positions, so re-ordering the view costs
+    /// nothing. A slice texture is ~900 KB and a backdrop ~400 KB, so these
+    /// caps are a few hundred MB at worst.
+    fn evict(&mut self) {
+        let trim = |map: &mut HashMap<i64, TextureHandle>, cap: usize, keep: [Option<i64>; 2]| {
+            if map.len() <= cap {
+                return Vec::new();
+            }
+            let mut ages: Vec<(u64, i64)> = map
+                .keys()
+                .filter(|k| !keep.contains(&Some(**k)))
+                .map(|k| (*self.seen.get(k).unwrap_or(&0), *k))
+                .collect();
+            ages.sort_unstable();
+
+            let mut dropped = Vec::new();
+            for (_, row) in ages.into_iter().take(map.len().saturating_sub(cap)) {
+                map.remove(&row);
+                dropped.push(row);
+            }
+            dropped
+        };
+
+        for row in trim(&mut self.slices, SLICE_CAP, [None, None]) {
+            // Let it be fetched again if it comes back into view.
+            self.requested.remove(&row);
+        }
+        trim(
+            &mut self.backdrops,
+            BACKDROP_CAP,
+            [self.shown_backdrop, self.prev_backdrop],
+        );
+
+        // Keep the recency map from growing without bound.
+        if self.seen.len() > SLICE_CAP * 4 {
+            let live: HashSet<i64> = self
+                .slices
+                .keys()
+                .chain(self.backdrops.keys())
+                .copied()
+                .collect();
+            self.seen.retain(|k, _| live.contains(k));
+        }
+    }
 
     fn bump(&self, slot: i64) -> f32 {
         (1.0 - (slot as f32 - self.pos).abs()).max(0.0)
