@@ -115,8 +115,13 @@ pub struct App {
     grid_scroll_target: f32,
     scroll_accum: f32,
 
-    sections: Vec<String>,
+    sections: Vec<(String, usize)>,
     filter_dir: Option<String>,
+    /// Section picker. A repo can have dozens of folders, so this is a menu
+    /// rather than something you click through one at a time.
+    section_menu: bool,
+    section_chip: Rect,
+    section_menu_rect: Rect,
     filter_swatch: Option<Swatch>,
     only_favs: bool,
     sort_colour: bool,
@@ -186,6 +191,9 @@ impl App {
             scroll_accum: 0.0,
             sections: Vec::new(),
             filter_dir: None,
+            section_menu: false,
+            section_chip: Rect::ZERO,
+            section_menu_rect: Rect::ZERO,
             filter_swatch: None,
             only_favs: false,
             sort_colour: false,
@@ -288,17 +296,23 @@ impl App {
     }
 
     fn recompute_sections(&mut self) {
-        let mut dirs: Vec<String> = Vec::new();
+        let mut counts: HashMap<&str, usize> = HashMap::new();
         for r in &self.rows {
-            if !r.group.is_empty() && !dirs.contains(&r.group) {
-                dirs.push(r.group.clone());
+            if !r.group.is_empty() {
+                *counts.entry(r.group.as_str()).or_default() += 1;
             }
         }
-        dirs.sort();
+        let mut dirs: Vec<(String, usize)> = counts
+            .into_iter()
+            .map(|(k, v)| (k.to_string(), v))
+            .collect();
+        dirs.sort_by(|a, b| a.0.cmp(&b.0));
         self.sections = dirs;
+
         if let Some(d) = &self.filter_dir {
-            if !self.sections.contains(d) {
+            if !self.sections.iter().any(|(name, _)| name == d) {
                 self.filter_dir = None;
+                self.section_menu = false;
             }
         }
     }
@@ -533,7 +547,9 @@ impl App {
         }
 
         if ctx.input(|i| i.key_pressed(Key::Escape)) {
-            if typing {
+            if self.section_menu {
+                self.section_menu = false;
+            } else if typing {
                 ctx.memory_mut(|m| m.stop_text_input());
             } else {
                 ctx.send_viewport_cmd(ViewportCommand::Close);
@@ -639,7 +655,20 @@ impl App {
                 )
             });
 
-        if !ctx.egui_wants_pointer_input() {
+        if self.section_menu {
+            // While the menu is open it owns the pointer: a click outside
+            // dismisses it rather than also selecting a wallpaper behind it.
+            if let Some(p) = ctx.input(|i| {
+                i.pointer
+                    .primary_released()
+                    .then(|| i.pointer.interact_pos())
+                    .flatten()
+            }) {
+                if !self.section_menu_rect.contains(p) && !self.section_chip.contains(p) {
+                    self.section_menu = false;
+                }
+            }
+        } else if !ctx.egui_wants_pointer_input() {
             self.handle_pointer(ctx);
         }
 
@@ -1765,7 +1794,10 @@ impl eframe::App for App {
                 segs.push(Seg::Gap);
                 segs.push(Seg::Btn(
                     "section",
-                    self.filter_dir.clone().unwrap_or_else(|| "all".into()),
+                    match &self.filter_dir {
+                        Some(d) => format!("{d} ▾"),
+                        None => format!("{} folders ▾", self.sections.len()),
+                    },
                     self.filter_dir.is_some(),
                 ));
             }
@@ -1799,6 +1831,9 @@ impl eframe::App for App {
                     Seg::Btn(id, text, active) => {
                         let w = measure(&text) + 20.0;
                         let r = Rect::from_min_size(Pos2::new(x, y), Vec2::new(w, h));
+                        if id == "section" {
+                            self.section_chip = r;
+                        }
                         if chip(ui, &painter, r, id, &text, font.clone(), active, self.accent) {
                             clicked = Some(id);
                         }
@@ -1864,18 +1899,7 @@ impl eframe::App for App {
                     self.rebuild_order();
                 }
                 Some("pin-current") => self.toggle_current_pin(&ctx),
-                Some("section") => {
-                    // Cycle: all -> each section -> all
-                    let next = match &self.filter_dir {
-                        None => self.sections.first().cloned(),
-                        Some(cur) => {
-                            let i = self.sections.iter().position(|s| s == cur).unwrap_or(0);
-                            self.sections.get(i + 1).cloned()
-                        }
-                    };
-                    self.filter_dir = next;
-                    self.rebuild_order();
-                }
+                Some("section") => self.section_menu = !self.section_menu,
                 Some("sort") => {
                     self.sort_colour = !self.sort_colour;
                     self.rebuild_order();
@@ -2251,6 +2275,103 @@ impl eframe::App for App {
                         theme::FAINT,
                     );
                 }
+            }
+        }
+
+        // ---- section menu ----------------------------------------------
+        // Drawn last so it sits above the strip and the rest of the chrome.
+        if self.section_menu && !self.sections.is_empty() {
+            let sections = self.sections.clone();
+            let total = self.rows.len();
+            let item_font = FontId::new(11.0, mono.clone());
+            let row_h = 24.0;
+            let inner = 10.0;
+            let col_w = 172.0;
+
+            // Columns rather than a scrollbar: a repo with 50 folders should
+            // show all of them at once.
+            let n = sections.len() + 1;
+            let max_rows = 16usize;
+            let cols = n.div_ceil(max_rows).max(1);
+            let rows = n.div_ceil(cols);
+
+            let w = cols as f32 * col_w + inner * 2.0;
+            let h = rows as f32 * row_h + inner * 2.0;
+            let left = self
+                .section_chip
+                .left()
+                .min(rect.right() - w - 12.0)
+                .max(rect.left() + 12.0);
+            let panel = Rect::from_min_size(
+                Pos2::new(left, self.section_chip.bottom() + 6.0),
+                Vec2::new(w, h),
+            );
+            self.section_menu_rect = panel;
+
+            painter.rect_filled(panel, 3.0, Color32::from_black_alpha(243));
+            painter.rect_stroke(
+                panel,
+                3.0,
+                Stroke::new(1.0, Color32::from_white_alpha(32)),
+                egui::StrokeKind::Inside,
+            );
+
+            let mut choose: Option<Option<String>> = None;
+            let entries = std::iter::once(("all".to_string(), total)).chain(sections);
+
+            for (idx, (name, count)) in entries.enumerate() {
+                let item = Rect::from_min_size(
+                    Pos2::new(
+                        panel.left() + inner + (idx / rows) as f32 * col_w,
+                        panel.top() + inner + (idx % rows) as f32 * row_h,
+                    ),
+                    Vec2::new(col_w - 6.0, row_h - 2.0),
+                );
+                let is_all = idx == 0;
+                let selected = if is_all {
+                    self.filter_dir.is_none()
+                } else {
+                    self.filter_dir.as_deref() == Some(name.as_str())
+                };
+
+                let resp = ui.interact(item, egui::Id::new(("sect", idx)), Sense::click());
+                if selected || resp.hovered() {
+                    painter.rect_filled(
+                        item,
+                        2.0,
+                        Color32::from_white_alpha(if selected { 22 } else { 12 }),
+                    );
+                }
+                painter.text(
+                    Pos2::new(item.left() + 8.0, item.center().y),
+                    Align2::LEFT_CENTER,
+                    &name,
+                    item_font.clone(),
+                    if selected {
+                        self.accent
+                    } else if resp.hovered() {
+                        theme::TEXT
+                    } else {
+                        theme::DIM
+                    },
+                );
+                painter.text(
+                    Pos2::new(item.right() - 8.0, item.center().y),
+                    Align2::RIGHT_CENTER,
+                    format!("{count}"),
+                    FontId::new(10.0, mono.clone()),
+                    theme::FAINT,
+                );
+
+                if resp.clicked() {
+                    choose = Some((!is_all).then(|| name.clone()));
+                }
+            }
+
+            if let Some(dir) = choose {
+                self.filter_dir = dir;
+                self.section_menu = false;
+                self.rebuild_order();
             }
         }
 

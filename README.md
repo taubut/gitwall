@@ -118,8 +118,16 @@ Scroll wheel still works, click focuses, and clicking the focused one applies.
 A press that moves less than a few points stays a click, so tapping still
 selects.
 
-The toolbar carries the same controls as the keys, plus a section filter and a
-colour-swatch filter.
+The toolbar carries the same controls as the keys, plus a colour-swatch filter
+and a section menu.
+
+**Sections** are the folders a repo organises its wallpapers into. Where a repo
+has them, the toolbar shows a `N folders ▾` chip that drops down a list with
+per-folder counts; pick one to filter to it, or `all` to clear.
+[dharmx/walls](https://github.com/dharmx/walls) is the case this was built for —
+1620 images across 52 folders, 3.1 GB of originals — where folders are the only
+practical way to navigate and cycling through them one at a time was not.
+The menu lays out in columns so every folder is visible at once.
 
 The field at the top takes all three kinds of input — a repo URL, an Imgur
 album, or a search phrase. The start screen lists what you have opened before,
