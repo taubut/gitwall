@@ -97,6 +97,9 @@ pub struct App {
     repo_rows: Vec<Row>,
     label: String,
     commit_short: String,
+    /// The input that produced the current collection, so it can be matched
+    /// against a history entry to pin it.
+    current_input: String,
     total_bytes: u64,
 
     source: Source,
@@ -170,6 +173,7 @@ impl App {
             repo_rows: Vec::new(),
             label: String::new(),
             commit_short: String::new(),
+            current_input: String::new(),
             total_bytes: 0,
             source: Source::Repo,
             view_mode: ViewMode::Slices,
@@ -392,6 +396,7 @@ impl App {
                 } => {
                     self.label = title.clone();
                     self.commit_short = badge;
+                    self.current_input = input.clone();
                     self.total_bytes = total_bytes;
                     self.repo_rows = rows.clone();
                     self.rows = rows;
@@ -586,6 +591,12 @@ impl App {
             return;
         }
 
+        // Backspace, not Escape: Escape closes the app and people rely on that.
+        if ctx.input(|i| i.key_pressed(Key::Backspace)) {
+            self.go_home();
+            return;
+        }
+
         let cols = self.columns();
         let grid = self.view_mode == ViewMode::Grid;
 
@@ -749,6 +760,46 @@ impl App {
         }
     }
 
+    /// Index of the history entry this collection came from, if any.
+    fn current_history_index(&self) -> Option<usize> {
+        if self.current_input.is_empty() {
+            return None;
+        }
+        self.library
+            .history()
+            .iter()
+            .position(|v| v.input == self.current_input)
+    }
+
+    fn current_is_pinned(&self) -> bool {
+        self.current_history_index()
+            .and_then(|i| self.library.history().get(i))
+            .is_some_and(|v| v.pinned)
+    }
+
+    fn toggle_current_pin(&mut self, ctx: &Context) {
+        match self.current_history_index() {
+            Some(i) => {
+                let now = self.library.toggle_pin(i);
+                let _ = self.library.save();
+                self.say(if now { "Pinned" } else { "Unpinned" }, false, ctx);
+            }
+            None => self.say("Nothing to pin — this isn't in your history", true, ctx),
+        }
+    }
+
+    /// Back to the start screen. Everything derived from the collection is
+    /// dropped so the screen is identical to a fresh launch; reopening is cheap
+    /// because the listing and thumbnails are cached.
+    fn go_home(&mut self) {
+        self.screen = Screen::Empty;
+        self.reset_images();
+        self.repo_rows.clear();
+        self.current_input.clear();
+        self.home_pick = 0;
+        self.home_scroll = 0.0;
+    }
+
     fn set_cursor(&mut self, slot: i64) {
         if self.order.is_empty() {
             return;
@@ -890,7 +941,8 @@ impl App {
     }
 
     fn pump(&mut self, ctx: &Context) {
-        if self.order.is_empty() {
+        // No point fetching for a collection that isn't being shown.
+        if self.order.is_empty() || !matches!(self.screen, Screen::Loaded) {
             return;
         }
         let near = self.pos.round() as i64;
@@ -1614,13 +1666,21 @@ impl eframe::App for App {
         // On the start screen the field is the subject, so it sits centred with
         // the mark; once a collection is open it retreats to the corner.
         if !home {
+            let mark = Rect::from_min_size(
+                Pos2::new(rect.left() + pad - 6.0, rect.top() + 16.0),
+                Vec2::new(112.0, 30.0),
+            );
+            let back = ui.interact(mark, egui::Id::new("go-home"), Sense::click());
             painter.text(
                 Pos2::new(rect.left() + pad, rect.top() + 30.0),
                 Align2::LEFT_CENTER,
                 "G I T W A L L",
                 FontId::new(11.0, mono.clone()),
-                theme::FAINT,
+                if back.hovered() { theme::TEXT } else { theme::FAINT },
             );
+            if back.clicked() {
+                self.go_home();
+            }
         }
 
         let field = if home {
@@ -1692,6 +1752,14 @@ impl eframe::App for App {
             ];
             if self.source == Source::Repo {
                 segs.push(Seg::Btn("only-fav", "STARRED".into(), self.only_favs));
+                // Deliberately worded, not a star: the ★ chip beside it means
+                // favourite *wallpapers*, and two stars would be ambiguous.
+                let pinned = self.current_is_pinned();
+                segs.push(Seg::Btn(
+                    "pin-current",
+                    if pinned { "PINNED".into() } else { "PIN".into() },
+                    pinned,
+                ));
             }
             if self.sections.len() > 1 {
                 segs.push(Seg::Gap);
@@ -1795,6 +1863,7 @@ impl eframe::App for App {
                     self.only_favs = !self.only_favs;
                     self.rebuild_order();
                 }
+                Some("pin-current") => self.toggle_current_pin(&ctx),
                 Some("section") => {
                     // Cycle: all -> each section -> all
                     let next = match &self.filter_dir {
@@ -2154,7 +2223,7 @@ impl eframe::App for App {
                     painter.text(
                         Pos2::new(rect.right() - pad, base + 16.0),
                         Align2::RIGHT_BOTTOM,
-                        "drag to flick   ⏎ set   F star   G grid   ⇥ favourites   esc close",
+                        "drag to flick   ⏎ set   F star   G grid   ⌫ back   esc close",
                         FontId::new(10.5, mono.clone()),
                         theme::FAINT,
                     );

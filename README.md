@@ -109,6 +109,7 @@ Detected from the environment, most specific first. Override with
 | <kbd>S</kbd> | sort by hue |
 | <kbd>Tab</kbd> | switch between this collection and your favourites |
 | <kbd>/</kbd> | jump to the source field |
+| <kbd>Backspace</kbd> | back to the start screen |
 | <kbd>Esc</kbd> | close |
 
 Mouse: grab the wallpapers and flick them — the release speed carries into a
@@ -126,6 +127,10 @@ tagged `repo` / `album` / `search`. Click one to reopen it, <kbd>★</kbd> to pi
 it, or <kbd>✕</kbd> to forget it. The list scrolls, and pinned entries sort to
 the top and are never dropped by the 24-entry cap — so a link you care about
 can't be pushed out by a run of searches.
+
+You can also pin the collection you are looking at, without going back: the
+toolbar's `PIN` chip toggles it. <kbd>Backspace</kbd> or clicking the wordmark
+returns to the start screen — <kbd>Esc</kbd> stays reserved for closing.
 
 Favourites and history live in `~/.local/share/gitwall/`. A favourite stores its
 own URLs rather than repo coordinates, so one starred list spans GitHub repos
