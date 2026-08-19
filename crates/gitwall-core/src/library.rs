@@ -66,6 +66,9 @@ pub struct Visit {
     pub images: usize,
     #[serde(default)]
     pub last_used: u64,
+    /// Pinned entries sort to the top and are never dropped by the history cap.
+    #[serde(default)]
+    pub pinned: bool,
 }
 
 /// What sort of collection a history entry points at, for labelling the list.
@@ -196,16 +199,59 @@ impl Library {
         &self.history
     }
 
-    pub fn record(&mut self, visit: Visit) {
+    pub fn record(&mut self, mut visit: Visit) {
+        // Revisiting must not silently unpin something.
+        if let Some(old) = self.history.iter().find(|v| v.same_place(&visit)) {
+            visit.pinned = old.pinned;
+        }
         self.history.retain(|v| !v.same_place(&visit));
         self.history.insert(0, visit);
-        self.history.truncate(MAX_HISTORY);
+        self.reorder();
+        self.trim();
     }
 
     pub fn forget(&mut self, index: usize) {
         if index < self.history.len() {
             self.history.remove(index);
         }
+    }
+
+    /// Returns the new state: true if it is now pinned.
+    pub fn toggle_pin(&mut self, index: usize) -> bool {
+        let now = match self.history.get_mut(index) {
+            Some(v) => {
+                v.pinned = !v.pinned;
+                v.pinned
+            }
+            None => return false,
+        };
+        self.reorder();
+        now
+    }
+
+    /// Pinned first, each group keeping its own recency order. Stored in this
+    /// order rather than sorted on read, so the indices the UI hands back to
+    /// `forget` and `toggle_pin` always line up with what was drawn.
+    fn reorder(&mut self) {
+        let (mut pinned, unpinned): (Vec<Visit>, Vec<Visit>) =
+            self.history.drain(..).partition(|v| v.pinned);
+        pinned.extend(unpinned);
+        self.history = pinned;
+    }
+
+    /// Drop the oldest unpinned entries. Pinning is an explicit request to keep
+    /// something, so a pinned entry is never discarded — even past the cap.
+    fn trim(&mut self) {
+        let pinned = self.history.iter().filter(|v| v.pinned).count();
+        let room = MAX_HISTORY.saturating_sub(pinned);
+        let mut kept_unpinned = 0;
+        self.history.retain(|v| {
+            if v.pinned {
+                return true;
+            }
+            kept_unpinned += 1;
+            kept_unpinned <= room
+        });
     }
 }
 
@@ -254,6 +300,7 @@ mod tests {
             input,
             images: 3,
             last_used: 0,
+            pinned: false,
         }
     }
 
@@ -328,6 +375,7 @@ mod tests {
             title: String::new(),
             images: 0,
             last_used: 0,
+            pinned: false,
         }
         .kind();
 
@@ -363,6 +411,56 @@ mod tests {
         lib.record(visit("a", "one", None));
 
         assert_eq!(lib.history().len(), 3);
+
+        let _ = std::fs::remove_dir_all(dir);
+    }
+
+    #[test]
+    fn pinned_entries_sort_first_and_survive_revisiting() {
+        let dir = tmp_dir("pin");
+        let mut lib = Library::open(dir.clone());
+
+        lib.record(visit("a", "one", None));
+        lib.record(visit("b", "two", None));
+        lib.record(visit("c", "three", None));
+
+        // Pin the oldest, which is now last.
+        let last = lib.history().len() - 1;
+        assert!(lib.toggle_pin(last), "toggling an unpinned entry pins it");
+        assert!(lib.history()[0].pinned, "pinned sorts to the top");
+        assert!(lib.history()[0].input.contains("one"));
+
+        // Revisiting it must not clear the pin.
+        lib.record(visit("a", "one", None));
+        assert!(lib.history()[0].pinned, "revisiting must preserve the pin");
+
+        // And visiting something else must not either.
+        lib.record(visit("d", "four", None));
+        assert!(lib.history()[0].pinned);
+        assert!(lib.history()[0].input.contains("one"));
+
+        let _ = std::fs::remove_dir_all(dir);
+    }
+
+    #[test]
+    fn the_cap_never_discards_a_pinned_entry() {
+        let dir = tmp_dir("pincap");
+        let mut lib = Library::open(dir.clone());
+
+        lib.record(visit("keep", "me", None));
+        assert!(lib.toggle_pin(0));
+
+        // Flood well past the cap.
+        for i in 0..MAX_HISTORY * 2 {
+            lib.record(visit("o", &format!("r{i}"), None));
+        }
+
+        assert!(
+            lib.history().iter().any(|v| v.input.contains("keep")),
+            "a pinned entry must outlive the cap"
+        );
+        assert!(lib.history()[0].pinned, "and still lead");
+        assert!(lib.history().len() <= MAX_HISTORY);
 
         let _ = std::fs::remove_dir_all(dir);
     }

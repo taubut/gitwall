@@ -121,8 +121,11 @@ The toolbar carries the same controls as the keys, plus a section filter and a
 colour-swatch filter.
 
 The field at the top takes all three kinds of input — a repo URL, an Imgur
-album, or a search phrase. The start screen lists what you have opened before;
-click one to reopen it, or the <kbd>✕</kbd> on its right to forget it.
+album, or a search phrase. The start screen lists what you have opened before,
+tagged `repo` / `album` / `search`. Click one to reopen it, <kbd>★</kbd> to pin
+it, or <kbd>✕</kbd> to forget it. The list scrolls, and pinned entries sort to
+the top and are never dropped by the 24-entry cap — so a link you care about
+can't be pushed out by a run of searches.
 
 Favourites and history live in `~/.local/share/gitwall/`. A favourite stores its
 own URLs rather than repo coordinates, so one starred list spans GitHub repos

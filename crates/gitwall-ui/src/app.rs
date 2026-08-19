@@ -134,6 +134,7 @@ pub struct App {
 
     url: String,
     home_pick: usize,
+    home_scroll: f32,
     accent: Color32,
     toast: Option<(String, f64, bool)>,
     applying: bool,
@@ -197,6 +198,7 @@ impl App {
             fade: 1.0,
             url: String::new(),
             home_pick: 0,
+            home_scroll: 0.0,
             accent: theme::ACCENT_FALLBACK,
             toast: None,
             applying: false,
@@ -405,6 +407,8 @@ impl App {
                         title,
                         images: self.rows.len(),
                         last_used: gitwall_core::library::now(),
+                        // record() carries the existing pin across.
+                        pinned: false,
                     });
                     let _ = self.library.save();
 
@@ -540,14 +544,35 @@ impl App {
         if matches!(self.screen, Screen::Empty) {
             let n = self.library.history().len();
             if n > 0 {
-                ctx.input(|i| {
-                    if i.key_pressed(Key::ArrowDown) {
-                        self.home_pick = (self.home_pick + 1).min(n - 1);
-                    }
-                    if i.key_pressed(Key::ArrowUp) {
-                        self.home_pick = self.home_pick.saturating_sub(1);
-                    }
+                let (down, up, wheel) = ctx.input(|i| {
+                    (
+                        i.key_pressed(Key::ArrowDown),
+                        i.key_pressed(Key::ArrowUp),
+                        i.smooth_scroll_delta.y,
+                    )
                 });
+                if down {
+                    self.home_pick = (self.home_pick + 1).min(n - 1);
+                }
+                if up {
+                    self.home_pick = self.home_pick.saturating_sub(1);
+                }
+
+                let layout = self.home_layout(self.screen_rect, n);
+                if wheel != 0.0 {
+                    self.home_scroll -= wheel;
+                }
+                if down || up {
+                    // Keep the highlighted row in view when stepping with keys.
+                    let top = self.home_pick as f32 * layout.row_h;
+                    if top < self.home_scroll {
+                        self.home_scroll = top;
+                    } else if top + layout.row_h > self.home_scroll + layout.list.height() {
+                        self.home_scroll = top + layout.row_h - layout.list.height();
+                    }
+                }
+                self.home_scroll = self.home_scroll.clamp(0.0, layout.max_scroll());
+
                 if ctx.input(|i| i.key_pressed(Key::Enter)) {
                     let url = self.library.history()[self.home_pick].input.clone();
                     self.url = url.clone();
@@ -1124,11 +1149,21 @@ struct HomeLayout {
     field: Rect,
     hint: Pos2,
     recent: Pos2,
-    rows_top: f32,
+    /// Scroll viewport for the history list.
+    list: Rect,
     row_h: f32,
     width: f32,
-    shown: usize,
-    hidden: usize,
+    entries: usize,
+}
+
+impl HomeLayout {
+    fn content_h(&self) -> f32 {
+        self.entries as f32 * self.row_h
+    }
+
+    fn max_scroll(&self) -> f32 {
+        (self.content_h() - self.list.height()).max(0.0)
+    }
 }
 
 impl App {
@@ -1137,17 +1172,15 @@ impl App {
         let row_h = 30.0;
         let mark_h = 44.0;
 
-        // Never let a long history push the block off screen.
-        let max_rows = ((rect.height() * 0.40 / row_h) as usize).clamp(3, 14);
-        let shown = entries.min(max_rows);
-        let hidden = entries - shown;
-
-        let list_h = if shown == 0 {
+        // The list scrolls, so it takes a bounded slice of the screen however
+        // long the history gets.
+        let view_h = if entries == 0 {
             0.0
         } else {
-            26.0 + shown as f32 * row_h + if hidden > 0 { 22.0 } else { 0.0 }
+            (entries as f32 * row_h).min(rect.height() * 0.38).max(row_h)
         };
-        let block = mark_h + 20.0 + 34.0 + 28.0 + 44.0 + 24.0 + 30.0 + list_h;
+        let list_block = if entries == 0 { 0.0 } else { 26.0 + view_h };
+        let block = mark_h + 20.0 + 34.0 + 28.0 + 44.0 + 24.0 + 30.0 + list_block;
 
         let cx = rect.center().x;
         let mut y = rect.center().y - block * 0.5;
@@ -1161,7 +1194,10 @@ impl App {
         let hint = Pos2::new(cx, y);
         y += 30.0;
         let recent = Pos2::new(cx - width * 0.5, y);
-        let rows_top = y + 26.0;
+        let list = Rect::from_min_size(
+            Pos2::new(cx - width * 0.5, y + 26.0),
+            Vec2::new(width, view_h),
+        );
 
         HomeLayout {
             mark,
@@ -1170,11 +1206,10 @@ impl App {
             field,
             hint,
             recent,
-            rows_top,
+            list,
             row_h,
             width,
-            shown,
-            hidden,
+            entries,
         }
     }
 
@@ -1840,7 +1875,7 @@ impl eframe::App for App {
                     theme::FAINT,
                 );
 
-                if layout.shown > 0 {
+                if layout.entries > 0 {
                     painter.text(
                         layout.recent,
                         Align2::LEFT_TOP,
@@ -1849,43 +1884,64 @@ impl eframe::App for App {
                         theme::FAINT,
                     );
 
+                    self.home_scroll = self.home_scroll.clamp(0.0, layout.max_scroll());
+                    let view = layout.list;
+                    let clip = painter.with_clip_rect(view);
+
                     let mut open: Option<String> = None;
                     let mut forget: Option<usize> = None;
+                    let mut pin: Option<usize> = None;
 
-                    for (i, v) in history.iter().take(layout.shown).enumerate() {
+                    let first = (self.home_scroll / layout.row_h).floor().max(0.0) as usize;
+                    for (i, v) in history.iter().enumerate().skip(first) {
                         let r = Rect::from_min_size(
                             Pos2::new(
-                                rect.center().x - layout.width * 0.5,
-                                layout.rows_top + i as f32 * layout.row_h,
+                                view.left(),
+                                view.top() + i as f32 * layout.row_h - self.home_scroll,
                             ),
                             Vec2::new(layout.width, layout.row_h - 2.0),
                         );
+                        if r.top() > view.bottom() {
+                            break;
+                        }
+                        if !r.intersects(view) {
+                            continue;
+                        }
+
+                        // Clamp the hit area to the viewport so a row peeking in
+                        // at the edge isn't clickable across its whole height.
+                        let hit = r.intersect(view);
                         let del = Rect::from_center_size(
                             Pos2::new(r.right() - 16.0, r.center().y),
                             Vec2::splat(22.0),
                         );
+                        let star = Rect::from_center_size(
+                            Pos2::new(r.right() - 42.0, r.center().y),
+                            Vec2::splat(22.0),
+                        );
+
                         // Order matters: egui puts whatever is registered last
-                        // on top, so the row has to go first for the delete
-                        // target to receive the click at all.
-                        let row_resp = ui.interact(r, egui::Id::new(("hist", i)), Sense::click());
+                        // on top, so the row goes first and the two buttons
+                        // after it, or the row swallows their clicks.
+                        let row_resp = ui.interact(hit, egui::Id::new(("hist", i)), Sense::click());
+                        let star_resp =
+                            ui.interact(star, egui::Id::new(("hist-pin", i)), Sense::click());
                         let del_resp =
                             ui.interact(del, egui::Id::new(("hist-del", i)), Sense::click());
 
                         let on = i == self.home_pick || row_resp.hovered();
                         if on {
-                            painter.rect_filled(r, 2.0, Color32::from_white_alpha(13));
+                            clip.rect_filled(r, 2.0, Color32::from_white_alpha(13));
                             // A bar rather than a border: it marks the row
                             // without boxing it in.
-                            painter.rect_filled(
+                            clip.rect_filled(
                                 Rect::from_min_size(r.left_top(), Vec2::new(2.0, r.height())),
                                 0.0,
                                 self.accent,
                             );
                         }
 
-                        // What kind of source this is, so the list reads as
-                        // structured rather than as a wall of identical text.
-                        painter.text(
+                        clip.text(
                             Pos2::new(r.left() + 16.0, r.center().y),
                             Align2::LEFT_CENTER,
                             v.kind().label(),
@@ -1895,8 +1951,8 @@ impl eframe::App for App {
 
                         let title_font = FontId::new(13.0, mono.clone());
                         let title_x = r.left() + 82.0;
-                        let room = (del.left() - 56.0) - title_x;
-                        painter.text(
+                        let room = (star.left() - 56.0) - title_x;
+                        clip.text(
                             Pos2::new(title_x, r.center().y),
                             Align2::LEFT_CENTER,
                             fit(&painter, &v.label(), &title_font, room.max(40.0)),
@@ -1904,14 +1960,32 @@ impl eframe::App for App {
                             if on { theme::TEXT } else { theme::DIM },
                         );
 
-                        painter.text(
-                            Pos2::new(del.left() - 14.0, r.center().y),
+                        clip.text(
+                            Pos2::new(star.left() - 10.0, r.center().y),
                             Align2::RIGHT_CENTER,
                             format!("{}", v.images),
                             FontId::new(11.0, mono.clone()),
                             theme::FAINT,
                         );
-                        painter.text(
+
+                        // Pinned entries keep their star lit so the state is
+                        // visible without hovering.
+                        clip.text(
+                            star.center(),
+                            Align2::CENTER_CENTER,
+                            "★",
+                            FontId::new(12.0, mono.clone()),
+                            if v.pinned {
+                                self.accent
+                            } else if star_resp.hovered() {
+                                theme::TEXT
+                            } else if on {
+                                theme::FAINT
+                            } else {
+                                Color32::from_white_alpha(30)
+                            },
+                        );
+                        clip.text(
                             del.center(),
                             Align2::CENTER_CENTER,
                             "✕",
@@ -1921,27 +1995,39 @@ impl eframe::App for App {
                             } else if on {
                                 theme::FAINT
                             } else {
-                                Color32::from_white_alpha(34)
+                                Color32::from_white_alpha(30)
                             },
                         );
 
                         if del_resp.clicked() {
                             forget = Some(i);
-                        } else if row_resp.clicked() && !del_resp.hovered() {
+                        } else if star_resp.clicked() {
+                            pin = Some(i);
+                        } else if row_resp.clicked()
+                            && !del_resp.hovered()
+                            && !star_resp.hovered()
+                        {
                             open = Some(v.input.clone());
                         }
                     }
 
-                    if layout.hidden > 0 {
-                        painter.text(
-                            Pos2::new(
-                                rect.center().x - layout.width * 0.5 + 16.0,
-                                layout.rows_top + layout.shown as f32 * layout.row_h + 4.0,
+                    // A hairline track, only when there is somewhere to scroll.
+                    if layout.max_scroll() > 0.5 {
+                        let track = Rect::from_min_size(
+                            Pos2::new(view.right() + 8.0, view.top()),
+                            Vec2::new(2.0, view.height()),
+                        );
+                        painter.rect_filled(track, 1.0, Color32::from_white_alpha(14));
+                        let frac = (view.height() / layout.content_h()).clamp(0.08, 1.0);
+                        let travel = view.height() * (1.0 - frac);
+                        let at = travel * (self.home_scroll / layout.max_scroll());
+                        painter.rect_filled(
+                            Rect::from_min_size(
+                                Pos2::new(track.left(), track.top() + at),
+                                Vec2::new(2.0, view.height() * frac),
                             ),
-                            Align2::LEFT_TOP,
-                            format!("+{} older", layout.hidden),
-                            FontId::new(10.5, mono.clone()),
-                            Color32::from_white_alpha(48),
+                            1.0,
+                            Color32::from_white_alpha(60),
                         );
                     }
 
@@ -1951,6 +2037,10 @@ impl eframe::App for App {
                         self.home_pick = self
                             .home_pick
                             .min(self.library.history().len().saturating_sub(1));
+                    } else if let Some(i) = pin {
+                        let now = self.library.toggle_pin(i);
+                        let _ = self.library.save();
+                        self.say(if now { "Pinned" } else { "Unpinned" }, false, &ctx);
                     } else if let Some(url) = open {
                         self.url = url.clone();
                         self.load(url);
